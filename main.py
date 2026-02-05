@@ -20,6 +20,7 @@ DEST_SHEET_ID = "1QGrwNXNHIdUl1nT1mF5_6o9LefZqfPIs2fLuzae3Res"
 DEST_SHEET_TAB_NAME = "socpacked_generated_data"
 DEST_START_CELL = "A1"
 FORCE_OVERWRITE = True
+STATUS_TAB_NAME = "upload_status"
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 WEBHOOK_TOKEN = os.environ.get("WEBHOOK_TOKEN", "")
 
@@ -175,6 +176,16 @@ def overwrite_sheet(sheets, values):
     ).execute()
 
 
+def update_status_cell(sheets, value: str):
+    safe = STATUS_TAB_NAME.replace("'", "''")
+    sheets.spreadsheets().values().update(
+        spreadsheetId=DEST_SHEET_ID,
+        range=f"'{safe}'!A1",
+        valueInputOption="RAW",
+        body={"values": [[value]]},
+    ).execute()
+
+
 def collect_rows_from_folder(drive, folder_id: str, state: Dict, ignore_last_dt: bool) -> Dict:
     zips = list_zip_files(drive, folder_id)
     last_ts = state.get("last_processed_zip_time")
@@ -220,12 +231,15 @@ def append_rows_to_sheet(sheets, new_rows: List[List[str]]):
 
 
 def process_folder(drive, sheets, folder_id: str, state: Dict, ignore_last_dt: bool):
+    update_status_cell(sheets, "Fetching Data, Please Wait..")
+
     result = collect_rows_from_folder(drive, folder_id, state, ignore_last_dt)
     new_rows = result["rows"]
     new_zip_ids = result["zip_ids"]
     max_dt = result["max_dt"]
 
     if not new_rows:
+        update_status_cell(sheets, datetime.now(timezone.utc).isoformat())
         print("No new ZIPs to import.")
         return
 
@@ -234,11 +248,13 @@ def process_folder(drive, sheets, folder_id: str, state: Dict, ignore_last_dt: b
     processed_zip_ids = set(state.get("processed_zip_ids", []))
     processed_zip_ids.update(new_zip_ids)
     state["processed_zip_ids"] = list(processed_zip_ids)
+    state["last_import_row_count"] = len(new_rows)
     if max_dt:
         state["last_processed_zip_time"] = max_dt.isoformat()
     state["last_run"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
 
+    update_status_cell(sheets, datetime.now(timezone.utc).isoformat())
     print("Import complete.")
 
 
@@ -317,6 +333,19 @@ app = Flask(__name__)
 @app.get("/healthz")
 def healthz():
     return "ok", 200
+
+
+@app.get("/status")
+def status():
+    state = load_state()
+    return jsonify(
+        {
+            "last_run": state.get("last_run"),
+            "last_processed_zip_time": state.get("last_processed_zip_time"),
+            "last_import_row_count": state.get("last_import_row_count", 0),
+            "processed_zip_count": len(state.get("processed_zip_ids", [])),
+        }
+    ), 200
 
 
 @app.post("/watch")
