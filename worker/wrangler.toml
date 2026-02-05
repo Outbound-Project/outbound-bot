@@ -7,4 +7,4 @@ FORWARD_URL = "https://outbound-bot-d5au.onrender.com"
 WEBHOOK_TOKEN = "s3cr3t-9b2c-4f1f-a1f0"
 
 [triggers]
-crons = ["0 0 */6 * *"]
+crons = ["0 0 */30 * *"]
