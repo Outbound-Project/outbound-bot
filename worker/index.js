@@ -1,5 +1,8 @@
 export default {
   async fetch(request, env) {
+    if (request.method === "POST" && new URL(request.url).pathname === "/renew") {
+      return renew(env);
+    }
     if (request.method === "GET") {
       return new Response("ok", { status: 200 });
     }
@@ -32,4 +35,24 @@ export default {
     const body = await res.text();
     return new Response(body, { status: res.status, headers: res.headers });
   },
+  async scheduled(_event, env) {
+    await renew(env);
+  },
 };
+
+async function renew(env) {
+  if (!env.FORWARD_URL) {
+    return new Response("missing FORWARD_URL", { status: 500 });
+  }
+  const url = new URL(env.FORWARD_URL);
+  url.pathname = "/watch";
+
+  const headers = new Headers();
+  if (env.WEBHOOK_TOKEN) {
+    headers.set("X-Goog-Channel-Token", env.WEBHOOK_TOKEN);
+  }
+
+  const res = await fetch(url.toString(), { method: "POST", headers });
+  const body = await res.text();
+  return new Response(body, { status: res.status, headers: res.headers });
+}
