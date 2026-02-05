@@ -42,7 +42,8 @@ COLUMNS = [
 ]
 
 STATE_PATH = "state.json"
-SERVICE_ACCOUNT_FILE = "creds/service_account.json"
+SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "creds/service_account.json")
+SERVICE_ACCOUNT_JSON = os.environ.get("SERVICE_ACCOUNT_JSON", "")
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
@@ -73,9 +74,15 @@ def save_state(state: Dict) -> None:
 
 
 def build_clients():
-    creds = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, scopes=SCOPES
-    )
+    if SERVICE_ACCOUNT_JSON:
+        info = json.loads(SERVICE_ACCOUNT_JSON)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=SCOPES
+        )
+    else:
+        creds = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES
+        )
     drive = build("drive", "v3", credentials=creds)
     sheets = build("sheets", "v4", credentials=creds)
     return drive, sheets
