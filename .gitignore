@@ -1,0 +1,3 @@
+venv/
+service
+creds/service_account.json

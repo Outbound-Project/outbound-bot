@@ -1,0 +1,7 @@
+name = "drive-webhook-forwarder"
+main = "index.js"
+compatibility_date = "2026-02-01"
+
+[vars]
+FORWARD_URL = ""
+WEBHOOK_TOKEN = ""
