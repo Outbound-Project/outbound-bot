@@ -58,7 +58,6 @@ def load_state() -> Dict:
             return json.load(f)
     except Exception:
         return {
-            "processed_folder_ids": [],
             "processed_zip_ids": [],
             "last_processed_zip_time": None,
             "page_token": None,
@@ -267,15 +266,14 @@ def register_changes_watch(drive, webhook_url: str, token: str, state: Dict) -> 
     return res
 
 
-def handle_drive_changes(drive, sheets, state: Dict) -> List[str]:
+def handle_drive_changes(drive, sheets, state: Dict) -> bool:
     page_token = state.get("page_token")
     if not page_token:
         state["page_token"] = get_start_page_token(drive)
         save_state(state)
-        return []
+        return False
 
-    processed_folder_ids = set(state.get("processed_folder_ids", []))
-    new_processed: List[str] = []
+    changed = False
     new_start_token = None
 
     while page_token:
@@ -294,29 +292,23 @@ def handle_drive_changes(drive, sheets, state: Dict) -> List[str]:
                 continue
             if file.get("trashed"):
                 continue
-            if file.get("mimeType") != "application/vnd.google-apps.folder":
-                continue
             parents = file.get("parents", [])
             if DRIVE_PARENT_FOLDER_ID not in parents:
                 continue
-            folder_id = change.get("fileId")
-            if not folder_id or folder_id in processed_folder_ids:
-                continue
-
-            print("New folder detected:", file.get("name"), folder_id)
-            process_folder(drive, sheets, folder_id, state, ignore_last_dt=True)
-            processed_folder_ids.add(folder_id)
-            new_processed.append(folder_id)
+            # Any change in the parent folder triggers a re-scan of that folder.
+            changed = True
 
         page_token = res.get("nextPageToken")
         new_start_token = res.get("newStartPageToken", new_start_token)
 
     if new_start_token:
         state["page_token"] = new_start_token
-        state["processed_folder_ids"] = list(processed_folder_ids)
         save_state(state)
 
-    return new_processed
+    if changed:
+        print("Change detected in parent folder. Scanning for new ZIPs.")
+        process_folder(drive, sheets, DRIVE_PARENT_FOLDER_ID, state, ignore_last_dt=False)
+    return changed
 
 
 app = Flask(__name__)
@@ -350,8 +342,8 @@ def webhook():
 
     state = load_state()
     drive, sheets = build_clients()
-    processed = handle_drive_changes(drive, sheets, state)
-    return jsonify({"processed_folder_ids": processed}), 200
+    changed = handle_drive_changes(drive, sheets, state)
+    return jsonify({"changed": changed}), 200
 
 
 def main():
