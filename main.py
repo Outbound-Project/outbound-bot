@@ -35,7 +35,7 @@ BASE_FONT_SIZE = int(os.environ.get("BASE_FONT_SIZE", "14"))
 IMAGE_SCALE = float(os.environ.get("IMAGE_SCALE", "3"))
 MAX_IMAGE_WIDTH = int(os.environ.get("MAX_IMAGE_WIDTH", "7000"))
 MAX_IMAGE_HEIGHT = int(os.environ.get("MAX_IMAGE_HEIGHT", "9000"))
-MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", "4700000")))
+MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", "4700000"))
 
 FILTERS = {
     "Receiver type": "Station",
@@ -318,10 +318,10 @@ def _build_merge_map(merges: List[Dict], start_row: int, start_col: int, row_cou
     return merge_map
 
 
-_font_cache: Dict[int, ImageFont.ImageFont] = {}
+_font_cache: Dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
 
 
-def _get_font(size: int) -> ImageFont.ImageFont:
+def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     cached = _font_cache.get(size)
     if cached is not None:
         return cached
@@ -333,10 +333,10 @@ def _get_font(size: int) -> ImageFont.ImageFont:
     return font
 
 
-def _font_height(font: ImageFont.ImageFont) -> int:
+def _font_height(font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
     try:
         bbox = font.getbbox("Ag")
-        return bbox[3] - bbox[1]
+        return int(bbox[3] - bbox[1])
     except Exception:
         return 12
 
