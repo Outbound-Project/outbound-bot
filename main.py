@@ -783,6 +783,34 @@ def watch():
     return jsonify(res), 200
 
 
+@app.get("/watch/status")
+def watch_status():
+    state = load_state()
+    return jsonify(
+        {
+            "channel_id": state.get("channel_id"),
+            "channel_resource_id": state.get("channel_resource_id"),
+            "channel_expiration": state.get("channel_expiration"),
+            "page_token": state.get("page_token"),
+        }
+    ), 200
+
+
+@app.post("/watch/renew")
+def watch_renew():
+    token = request.headers.get("X-Goog-Channel-Token")
+    if WEBHOOK_TOKEN and token != WEBHOOK_TOKEN:
+        return jsonify({"error": "invalid token"}), 401
+
+    state = load_state()
+    drive, _ = build_clients()
+    try:
+        res = register_changes_watch(drive, WEBHOOK_URL, WEBHOOK_TOKEN, state)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(res), 200
+
+
 @app.post("/run")
 def run_once():
     token = request.headers.get("X-Goog-Channel-Token")
