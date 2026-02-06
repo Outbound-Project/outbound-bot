@@ -147,7 +147,8 @@ def create_app() -> Flask:
                 changed = handle_drive_changes(drive, sheets, workflow, state)
             except Exception as exc:
                 log(f"Webhook error: {exc}")
-                return jsonify({"error": "webhook failure"}), 500
+                # Avoid repeated Drive retry storms; let the watch continue.
+                return jsonify({"error": "transient webhook failure"}), 202
             finally:
                 log("Webhook request finished.")
             return jsonify({"changed": changed}), 200
@@ -273,7 +274,7 @@ def create_app() -> Flask:
             changed = handle_drive_changes(drive, sheets, backlogs, state)
         except Exception as exc:
             log(f"Webhook error: {exc}")
-            return jsonify({"error": "webhook failure"}), 500
+            return jsonify({"error": "transient webhook failure"}), 202
         finally:
             log("Webhook request finished.")
         return jsonify({"changed": changed}), 200

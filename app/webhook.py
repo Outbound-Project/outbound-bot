@@ -116,16 +116,19 @@ def handle_drive_changes(drive, sheets, workflow: WorkflowConfig, state: Dict) -
     new_start_token = None
 
     while page_token:
-        res = drive.changes().list(
-            pageToken=page_token,
-            spaces="drive",
-            fields=(
-                "changes(fileId,file(name,mimeType,parents,trashed,createdTime,modifiedTime)),"
-                "nextPageToken,newStartPageToken"
-            ),
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-        ).execute()
+        res = with_retries(
+            lambda: drive.changes().list(
+                pageToken=page_token,
+                spaces="drive",
+                fields=(
+                    "changes(fileId,file(name,mimeType,parents,trashed,createdTime,modifiedTime)),"
+                    "nextPageToken,newStartPageToken"
+                ),
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute(),
+            "Drive changes list",
+        )
 
         for change in res.get("changes", []):
             file = change.get("file")

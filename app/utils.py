@@ -6,6 +6,8 @@ import json
 import os
 import time
 from typing import Dict, Iterable
+import ssl
+import socket
 from urllib.parse import urlparse
 
 from googleapiclient.errors import HttpError
@@ -99,6 +101,14 @@ def _should_retry_http_error(exc: Exception) -> bool:
             return 500 <= int(exc.resp.status) < 600
         except Exception:
             return True
+    if isinstance(exc, ssl.SSLError):
+        return True
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if "timed out" in str(exc).lower():
+        return True
+    if "SSL" in str(exc):
+        return True
     return False
 
 
