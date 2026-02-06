@@ -538,6 +538,19 @@ def watch():
     return jsonify(res), 200
 
 
+@app.post("/run")
+def run_once():
+    token = request.headers.get("X-Goog-Channel-Token")
+    if WEBHOOK_TOKEN and token != WEBHOOK_TOKEN:
+        return jsonify({"error": "invalid token"}), 401
+
+    force = request.args.get("force", "").lower() in {"1", "true", "yes"}
+    state = load_state()
+    drive, sheets = build_clients()
+    process_folder(drive, sheets, DRIVE_PARENT_FOLDER_ID, state, ignore_last_dt=force)
+    return jsonify({"ok": True, "forced": force}), 200
+
+
 @app.post("/webhook")
 def webhook():
     token = request.headers.get("X-Goog-Channel-Token")
