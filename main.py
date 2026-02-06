@@ -94,7 +94,12 @@ def build_clients():
 
 def list_zip_files(drive, folder_id):
     q = f"'{folder_id}' in parents and trashed=false and name contains '.zip'"
-    res = drive.files().list(q=q, fields="files(id,name,modifiedTime)").execute()
+    res = drive.files().list(
+        q=q,
+        fields="files(id,name,modifiedTime)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
     return res.get("files", [])
 
 
@@ -379,7 +384,7 @@ def process_folder(drive, sheets, folder_id: str, state: Dict, ignore_last_dt: b
 
 
 def get_start_page_token(drive) -> str:
-    res = drive.changes().getStartPageToken().execute()
+    res = drive.changes().getStartPageToken(supportsAllDrives=True).execute()
     return res["startPageToken"]
 
 
@@ -420,6 +425,8 @@ def handle_drive_changes(drive, sheets, state: Dict) -> bool:
                 "changes(fileId,file(name,mimeType,parents,trashed,createdTime,modifiedTime)),"
                 "nextPageToken,newStartPageToken"
             ),
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
         ).execute()
 
         for change in res.get("changes", []):
