@@ -6,7 +6,6 @@ import zipfile
 from base64 import b64encode
 from datetime import datetime, timezone, timedelta
 import time
-import threading
 from typing import Dict, List
 from urllib import request as urlrequest
 
@@ -238,7 +237,7 @@ def get_range_values(sheets, tab_name: str, a1_range: str) -> List[List[str]]:
             range=f"'{safe}'!{a1_range}",
         ).execute(),
         "Sheets get range"
-    )
+    ) or {}
     return res.get("values", [])
 
 
@@ -505,9 +504,6 @@ def handle_drive_changes(drive, sheets, state: Dict) -> bool:
 
 
 app = Flask(__name__)
-_webhook_lock = threading.Lock()
-_webhook_in_flight = False
-_webhook_pending = False
 
 
 @app.get("/healthz")
@@ -524,8 +520,6 @@ def status():
             "last_processed_zip_time": state.get("last_processed_zip_time"),
             "last_import_row_count": state.get("last_import_row_count", 0),
             "processed_zip_count": len(state.get("processed_zip_ids", [])),
-            "webhook_in_flight": _webhook_in_flight,
-            "webhook_pending": _webhook_pending,
         }
     ), 200
 
@@ -543,7 +537,6 @@ def watch():
 
 @app.post("/webhook")
 def webhook():
-    global _webhook_in_flight, _webhook_pending
     token = request.headers.get("X-Goog-Channel-Token")
     if WEBHOOK_TOKEN and token != WEBHOOK_TOKEN:
         return jsonify({"error": "invalid token"}), 401
@@ -552,40 +545,18 @@ def webhook():
     if resource_state == "sync":
         return "", 200
 
-    def _runner():
-        global _webhook_in_flight, _webhook_pending
-        try:
-            log("Webhook worker started.")
-            state = load_state()
-            drive, sheets = build_clients()
-            try:
-                handle_drive_changes(drive, sheets, state)
-            except Exception as exc:
-                log(f"Webhook worker error: {exc}")
-        finally:
-            log("Webhook worker finished.")
-            rerun = False
-            with _webhook_lock:
-                if _webhook_pending:
-                    _webhook_pending = False
-                    rerun = True
-                else:
-                    _webhook_in_flight = False
-            if rerun:
-                log("Webhook pending flag set; starting follow-up run.")
-                threading.Thread(target=_runner, daemon=True).start()
-
-    with _webhook_lock:
-        if _webhook_in_flight:
-            _webhook_pending = True
-            log("Webhook request queued: worker already in flight.")
-            return jsonify({"queued": True}), 200
-        _webhook_in_flight = True
-        _webhook_pending = False
-        log("Webhook request accepted.")
-
-    threading.Thread(target=_runner, daemon=True).start()
-    return jsonify({"queued": True}), 200
+    log("Webhook request started.")
+    state = load_state()
+    drive, sheets = build_clients()
+    changed = False
+    try:
+        changed = handle_drive_changes(drive, sheets, state)
+    except Exception as exc:
+        log(f"Webhook error: {exc}")
+        raise
+    finally:
+        log("Webhook request finished.")
+    return jsonify({"changed": changed}), 200
 
 
 def main():
