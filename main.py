@@ -5,6 +5,7 @@ import uuid
 import zipfile
 from base64 import b64encode
 from datetime import datetime, timezone, timedelta
+import threading
 from typing import Dict, List
 from urllib import request as urlrequest
 
@@ -75,6 +76,11 @@ def load_state() -> Dict:
 def save_state(state: Dict) -> None:
     with open(STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
+
+
+def log(msg: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    print(f"[{ts}] {msg}")
 
 
 def build_clients():
@@ -455,6 +461,9 @@ def handle_drive_changes(drive, sheets, state: Dict) -> bool:
 
 
 app = Flask(__name__)
+_webhook_lock = threading.Lock()
+_webhook_in_flight = False
+_webhook_pending = False
 
 
 @app.get("/healthz")
@@ -471,6 +480,8 @@ def status():
             "last_processed_zip_time": state.get("last_processed_zip_time"),
             "last_import_row_count": state.get("last_import_row_count", 0),
             "processed_zip_count": len(state.get("processed_zip_ids", [])),
+            "webhook_in_flight": _webhook_in_flight,
+            "webhook_pending": _webhook_pending,
         }
     ), 200
 
@@ -488,6 +499,7 @@ def watch():
 
 @app.post("/webhook")
 def webhook():
+    global _webhook_in_flight, _webhook_pending
     token = request.headers.get("X-Goog-Channel-Token")
     if WEBHOOK_TOKEN and token != WEBHOOK_TOKEN:
         return jsonify({"error": "invalid token"}), 401
@@ -496,10 +508,37 @@ def webhook():
     if resource_state == "sync":
         return "", 200
 
-    state = load_state()
-    drive, sheets = build_clients()
-    changed = handle_drive_changes(drive, sheets, state)
-    return jsonify({"changed": changed}), 200
+    def _runner():
+        global _webhook_in_flight, _webhook_pending
+        try:
+            log("Webhook worker started.")
+            state = load_state()
+            drive, sheets = build_clients()
+            handle_drive_changes(drive, sheets, state)
+        finally:
+            log("Webhook worker finished.")
+            rerun = False
+            with _webhook_lock:
+                if _webhook_pending:
+                    _webhook_pending = False
+                    rerun = True
+                else:
+                    _webhook_in_flight = False
+            if rerun:
+                log("Webhook pending flag set; starting follow-up run.")
+                threading.Thread(target=_runner, daemon=True).start()
+
+    with _webhook_lock:
+        if _webhook_in_flight:
+            _webhook_pending = True
+            log("Webhook request queued: worker already in flight.")
+            return jsonify({"queued": True}), 200
+        _webhook_in_flight = True
+        _webhook_pending = False
+        log("Webhook request accepted.")
+
+    threading.Thread(target=_runner, daemon=True).start()
+    return jsonify({"queued": True}), 200
 
 
 def main():
