@@ -48,7 +48,10 @@ COLUMNS = [
     "Staging Area ID",
 ]
 
-STATE_PATH = "state.json"
+STATE_PATH = os.environ.get("STATE_PATH", "")
+if not STATE_PATH:
+    tmp_dir = os.environ.get("TMPDIR") or os.environ.get("TEMP") or "/tmp"
+    STATE_PATH = os.path.join(tmp_dir, "state.json")
 SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT_FILE", "creds/service_account.json")
 SERVICE_ACCOUNT_JSON = os.environ.get("SERVICE_ACCOUNT_JSON", "")
 
