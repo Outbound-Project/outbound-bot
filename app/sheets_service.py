@@ -4,6 +4,7 @@ from base64 import b64encode
 from datetime import datetime, timezone, timedelta
 import io
 import json
+import os
 import time
 import zipfile
 from typing import Dict, List, Tuple
@@ -149,6 +150,9 @@ def append_rows_to_sheet(sheets, workflow: WorkflowConfig, new_rows: List[List[s
 
 _font_cache: Dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
 _render_lock = threading.Lock()
+_safe_render = os.environ.get("SAFE_IMAGE_RENDER", "").strip().lower() in {"1", "true", "yes", "on"}
+_vercel_env = os.environ.get("VERCEL") == "1"
+_safe_render = _safe_render or _vercel_env
 
 
 _grid_cache: Dict[Tuple[int, str, str], Tuple[float, Dict]] = {}
@@ -238,6 +242,8 @@ def _build_merge_map(merges: List[Dict], start_row: int, start_col: int, row_cou
 
 
 def _get_font(workflow: WorkflowConfig, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    if _safe_render:
+        return ImageFont.load_default()
     cached = _font_cache.get(size)
     if cached is not None:
         return cached
@@ -277,6 +283,8 @@ def render_sheet_range_image(sheets, workflow: WorkflowConfig, tab_name: str, a1
         col_count = max((len(r.get("values", [])) for r in row_data), default=0)
 
         scale = workflow.image_scale
+        if _safe_render:
+            scale = min(scale, 2.0)
         row_heights = []
         for idx in range(row_count):
             px = row_meta[idx].get("pixelSize") if idx < len(row_meta) else None

@@ -51,6 +51,7 @@ Shared:
 - `MAX_IMAGE_WIDTH`: Max image width (default: `7000`).
 - `MAX_IMAGE_HEIGHT`: Max image height (default: `9000`).
 - `MAX_IMAGE_BYTES`: Max image bytes (default: `4700000`).
+- `SAFE_IMAGE_RENDER`: `true`/`false` (default: `false`, but auto-enabled on Vercel) to use default font and cap scale to reduce crashes.
 - `STATE_PATH`: Path to state file (default: system temp `state.json`).
 - `ALLOW_INSECURE_WEBHOOK`: `true`/`false` (default: `false`).
 - `UPSTASH_REDIS_REST_URL` or `KV_REST_API_URL`: REST URL for Vercel KV (preferred).
