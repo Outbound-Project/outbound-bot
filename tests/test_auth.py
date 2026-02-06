@@ -5,8 +5,8 @@ from app.config import get_config
 
 
 def _base_env(monkeypatch):
-    monkeypatch.setenv("BACKLOGS_DRIVE_PARENT_FOLDER_ID", "folder123")
-    monkeypatch.setenv("BACKLOGS_DEST_SHEET_ID", "sheet123")
+    monkeypatch.setenv("DRIVE_PARENT_FOLDER_ID", "folder123")
+    monkeypatch.setenv("DEST_SHEET_ID", "sheet123")
 
 
 def test_require_webhook_auth_allows_when_missing(monkeypatch):

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import uuid
 from typing import Dict, List
 
-from .config import WorkflowConfig
+from .config import AppConfig
 from .drive_service import download_zip, get_start_page_token, list_zip_files
 from .sheets_service import (
     append_rows_to_sheet,
@@ -17,9 +17,7 @@ from .sheets_service import (
 from .utils import log, parse_rfc3339, save_state, with_retries
 
 
-def collect_rows_from_folder(
-    drive, workflow: WorkflowConfig, folder_id: str, state: Dict, ignore_last_dt: bool
-) -> Dict:
+def collect_rows_from_folder(drive, config: AppConfig, folder_id: str, state: Dict, ignore_last_dt: bool) -> Dict:
     zips = list_zip_files(drive, folder_id)
     last_ts = state.get("last_processed_zip_time")
     last_dt = None if ignore_last_dt or not last_ts else parse_rfc3339(last_ts)
@@ -31,7 +29,7 @@ def collect_rows_from_folder(
     for z in zips:
         z_dt = parse_rfc3339(z["modifiedTime"])
         is_new = (
-            workflow.force_overwrite
+            config.force_overwrite
             or ignore_last_dt
             or (last_dt is None or z_dt > last_dt)
             or z["id"] not in state.get("processed_zip_ids", [])
@@ -50,23 +48,21 @@ def collect_rows_from_folder(
     return {"rows": new_rows, "zip_ids": new_zip_ids, "max_dt": max_dt}
 
 
-def process_folder(
-    drive, sheets, workflow: WorkflowConfig, folder_id: str, state: Dict, ignore_last_dt: bool
-) -> None:
-    update_backlogs_status(sheets, workflow, "Fetching data...")
+def process_folder(drive, sheets, config: AppConfig, folder_id: str, state: Dict, ignore_last_dt: bool) -> None:
+    update_backlogs_status(sheets, config, "Fetching data...")
 
-    result = collect_rows_from_folder(drive, workflow, folder_id, state, ignore_last_dt)
+    result = collect_rows_from_folder(drive, config, folder_id, state, ignore_last_dt)
     new_rows = result["rows"]
     new_zip_ids = result["zip_ids"]
     max_dt = result["max_dt"]
     now_display = format_status_now()
 
     if not new_rows:
-        update_backlogs_status(sheets, workflow, now_display)
+        update_backlogs_status(sheets, config, now_display)
         print("No new ZIPs to import.")
         return
 
-    append_rows_to_sheet(sheets, workflow, new_rows)
+    append_rows_to_sheet(sheets, config, new_rows)
 
     processed_zip_ids = set(state.get("processed_zip_ids", []))
     processed_zip_ids.update(new_zip_ids)
@@ -75,40 +71,40 @@ def process_folder(
     if max_dt:
         state["last_processed_zip_time"] = max_dt.isoformat()
     state["last_run"] = datetime.now(timezone.utc).isoformat()
-    save_state(workflow.state_path, state, workflow.state_key)
+    save_state(config.state_path, state)
 
-    update_backlogs_status(sheets, workflow, now_display)
-    if workflow.skip_seatalk_images:
+    update_backlogs_status(sheets, config, now_display)
+    if config.skip_seatalk_images:
         log("Skipping SeaTalk images (SKIP_SEATALK_IMAGES enabled).")
     else:
-        send_dashboard_images(sheets, workflow, now_display)
+        send_dashboard_images(sheets, config, now_display)
     print("Import complete.")
 
 
-def register_changes_watch(drive, workflow: WorkflowConfig, state: Dict) -> Dict:
-    if not workflow.webhook_url:
+def register_changes_watch(drive, config: AppConfig, state: Dict) -> Dict:
+    if not config.webhook_url:
         raise ValueError("WEBHOOK_URL is required to register a watch channel.")
     page_token = state.get("page_token") or get_start_page_token(drive)
     state["page_token"] = page_token
 
     channel_id = str(uuid.uuid4())
-    body = {"id": channel_id, "type": "web_hook", "address": workflow.webhook_url}
-    if workflow.webhook_token:
-        body["token"] = workflow.webhook_token
+    body = {"id": channel_id, "type": "web_hook", "address": config.webhook_url}
+    if config.webhook_token:
+        body["token"] = config.webhook_token
 
     res = drive.changes().watch(pageToken=page_token, body=body).execute()
     state["channel_id"] = res.get("id")
     state["channel_resource_id"] = res.get("resourceId")
     state["channel_expiration"] = res.get("expiration")
-    save_state(workflow.state_path, state, workflow.state_key)
+    save_state(config.state_path, state)
     return res
 
 
-def handle_drive_changes(drive, sheets, workflow: WorkflowConfig, state: Dict) -> bool:
+def handle_drive_changes(drive, sheets, config: AppConfig, state: Dict) -> bool:
     page_token = state.get("page_token")
     if not page_token:
         state["page_token"] = get_start_page_token(drive)
-        save_state(workflow.state_path, state, workflow.state_key)
+        save_state(config.state_path, state)
         return False
 
     changed = False
@@ -144,12 +140,12 @@ def handle_drive_changes(drive, sheets, workflow: WorkflowConfig, state: Dict) -
                 file_id = change.get("fileId") or file.get("id")
                 if (
                     name.endswith(".zip")
-                    and (not parents or workflow.drive_parent_folder_id in parents)
+                    and (not parents or config.drive_parent_folder_id in parents)
                 ) or (file_id and file_id in state.get("processed_zip_ids", [])):
                     deleted_zip = True
                 continue
             parents = file.get("parents", [])
-            if workflow.drive_parent_folder_id not in parents:
+            if config.drive_parent_folder_id not in parents:
                 continue
             changed = True
 
@@ -158,24 +154,22 @@ def handle_drive_changes(drive, sheets, workflow: WorkflowConfig, state: Dict) -
 
     if new_start_token:
         state["page_token"] = new_start_token
-        save_state(workflow.state_path, state, workflow.state_key)
+        save_state(config.state_path, state)
 
     if deleted_zip:
         print("ZIP deleted in parent folder. Clearing destination sheet.")
-        clear_destination_sheet(sheets, workflow, state)
-        save_state(workflow.state_path, state, workflow.state_key)
+        clear_destination_sheet(sheets, config, state)
+        save_state(config.state_path, state)
         return True
 
     if changed:
         print("Change detected in parent folder. Scanning for new ZIPs.")
-        process_folder(drive, sheets, workflow, workflow.drive_parent_folder_id, state, ignore_last_dt=False)
+        process_folder(drive, sheets, config, config.drive_parent_folder_id, state, ignore_last_dt=False)
     return changed
 
 
-def safe_process_folder(drive, sheets, workflow: WorkflowConfig, state: Dict, ignore_last_dt: bool) -> None:
+def safe_process_folder(drive, sheets, config: AppConfig, state: Dict, ignore_last_dt: bool) -> None:
     with_retries(
-        lambda: process_folder(
-            drive, sheets, workflow, workflow.drive_parent_folder_id, state, ignore_last_dt
-        ),
+        lambda: process_folder(drive, sheets, config, config.drive_parent_folder_id, state, ignore_last_dt),
         "Process folder",
     )
