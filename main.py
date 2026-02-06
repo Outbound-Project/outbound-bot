@@ -30,6 +30,12 @@ BACKLOGS_STATUS_TAB = "Backlogs Summary"
 BACKLOGS_STATUS_CELL = "F3"
 SEATALK_WEBHOOK_URL = os.environ.get("SEATALK_WEBHOOK_URL", "")
 SKIP_SEATALK_IMAGES = os.environ.get("SKIP_SEATALK_IMAGES", "").lower() in {"1", "true", "yes"}
+FONT_PATH = os.environ.get("FONT_PATH", "assets/fonts/Inter.ttf")
+BASE_FONT_SIZE = int(os.environ.get("BASE_FONT_SIZE", "12"))
+IMAGE_SCALE = float(os.environ.get("IMAGE_SCALE", "2"))
+MAX_IMAGE_WIDTH = int(os.environ.get("MAX_IMAGE_WIDTH", "4000"))
+MAX_IMAGE_HEIGHT = int(os.environ.get("MAX_IMAGE_HEIGHT", "4000"))
+MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", str(4 * 1024 * 1024)))
 
 FILTERS = {
     "Receiver type": "Station",
@@ -312,15 +318,36 @@ def _build_merge_map(merges: List[Dict], start_row: int, start_col: int, row_cou
     return merge_map
 
 
-def render_sheet_range_image(sheets, tab_name: str, a1_range: str) -> bytes:
+_font_cache: Dict[int, ImageFont.ImageFont] = {}
+
+
+def _get_font(size: int) -> ImageFont.ImageFont:
+    cached = _font_cache.get(size)
+    if cached is not None:
+        return cached
+    try:
+        font = ImageFont.truetype(FONT_PATH, size)
+    except Exception:
+        font = ImageFont.load_default()
+    _font_cache[size] = font
+    return font
+
+
+def _font_height(font: ImageFont.ImageFont) -> int:
+    try:
+        bbox = font.getbbox("Ag")
+        return bbox[3] - bbox[1]
+    except Exception:
+        return 12
+
+
+def render_sheet_range_image(sheets, tab_name: str, a1_range: str) -> Image.Image:
     sheet = _get_grid_data(sheets, tab_name, a1_range)
     if not sheet:
         img = Image.new("RGB", (400, 60), "white")
         draw = ImageDraw.Draw(img)
         draw.text((10, 20), "No data", fill="#111111", font=ImageFont.load_default())
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        return buf.getvalue()
+        return img
 
     data = sheet.get("data", [{}])[0]
     row_data = data.get("rowData", [])
@@ -332,27 +359,24 @@ def render_sheet_range_image(sheets, tab_name: str, a1_range: str) -> bytes:
     row_count = len(row_data)
     col_count = max((len(r.get("values", [])) for r in row_data), default=0)
 
+    scale = IMAGE_SCALE
     row_heights = []
     for idx in range(row_count):
         px = row_meta[idx].get("pixelSize") if idx < len(row_meta) else None
-        row_heights.append(int(px) if px else 21)
+        base = int(px) if px else 21
+        row_heights.append(max(1, int(base * scale)))
 
     col_widths = []
     for idx in range(col_count):
         px = col_meta[idx].get("pixelSize") if idx < len(col_meta) else None
-        col_widths.append(int(px) if px else 100)
+        base = int(px) if px else 100
+        col_widths.append(max(1, int(base * scale)))
 
     width = sum(col_widths) + 1
     height = sum(row_heights) + 1
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
 
-    default_font = ImageFont.load_default()
-    try:
-        _font_bbox = default_font.getbbox("Ag")
-        font_height = _font_bbox[3] - _font_bbox[1]
-    except Exception:
-        font_height = 12
     merges = _build_merge_map(sheet.get("merges", []), start_row, start_col, row_count, col_count)
 
     y = 0
@@ -395,11 +419,13 @@ def render_sheet_range_image(sheets, tab_name: str, a1_range: str) -> bytes:
             tf = eff.get("textFormat", {})
             fg = _color_from_google(tf.get("foregroundColor"), (17, 17, 17))
             bold = bool(tf.get("bold"))
+            font_size = int(tf.get("fontSize", BASE_FONT_SIZE) * scale)
+            font = _get_font(max(8, font_size))
+            text_h = _font_height(font)
 
             align = eff.get("horizontalAlignment", "LEFT")
-            pad = 4
-            text_w = int(default_font.getlength(text)) if text else 0
-            text_h = font_height
+            pad = max(1, int(4 * scale))
+            text_w = int(font.getlength(text)) if text else 0
             if align == "CENTER":
                 tx = x + max(pad, (cell_width - text_w) // 2)
             elif align == "RIGHT":
@@ -409,11 +435,12 @@ def render_sheet_range_image(sheets, tab_name: str, a1_range: str) -> bytes:
             ty = y + max(2, (cell_height - text_h) // 2)
 
             if text:
-                draw.text((tx, ty), text, fill=fg, font=default_font)
+                draw.text((tx, ty), text, fill=fg, font=font)
                 if bold:
-                    draw.text((tx + 1, ty), text, fill=fg, font=default_font)
+                    draw.text((tx + max(1, int(scale)), ty), text, fill=fg, font=font)
 
             borders = eff.get("borders", {})
+            line_w = max(1, int(scale))
             for side, x1, y1, x2, y2 in [
                 ("top", x, y, x + cell_width, y),
                 ("bottom", x, y + cell_height, x + cell_width, y + cell_height),
@@ -423,46 +450,75 @@ def render_sheet_range_image(sheets, tab_name: str, a1_range: str) -> bytes:
                 b = borders.get(side)
                 if b:
                     color = _color_from_google(b.get("color"), (217, 217, 217))
-                    draw.line([x1, y1, x2, y2], fill=color, width=1)
+                    draw.line([x1, y1, x2, y2], fill=color, width=line_w)
 
             x += col_widths[c_idx]
         y += row_heights[r_idx]
 
-    max_width = 2000
-    max_height = 1400
-    if img.width > max_width or img.height > max_height:
-        ratio = min(max_width / img.width, max_height / img.height)
-        new_size = (int(img.width * ratio), int(img.height * ratio))
-        resample = getattr(getattr(Image, "Resampling", None), "LANCZOS", 3)
-        img = img.resize(new_size, resample)
+    return img
 
+
+def _encode_image(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 
 
-def stack_images_vertically(images: List[bytes], padding: int = 8) -> bytes:
-    pil_images = [Image.open(io.BytesIO(b)).convert("RGB") for b in images if b]
-    if not pil_images:
-        img = Image.new("RGB", (400, 60), "white")
-        draw = ImageDraw.Draw(img)
-        draw.text((10, 20), "No data", fill="#111111", font=ImageFont.load_default())
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        return buf.getvalue()
+def _fit_image_bytes(img: Image.Image) -> bytes:
+    scale = 1.0
+    for _ in range(6):
+        if scale < 1.0:
+            new_size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+            resized = img.resize(new_size, getattr(getattr(Image, "Resampling", None), "LANCZOS", 3))
+        else:
+            resized = img
+        data = _encode_image(resized)
+        if len(data) <= MAX_IMAGE_BYTES:
+            return data
+        scale *= 0.85
+    return _encode_image(img)
 
-    width = max(i.width for i in pil_images)
-    height = sum(i.height for i in pil_images) + padding * (len(pil_images) - 1)
+
+def _split_image(img: Image.Image) -> List[Image.Image]:
+    max_w = MAX_IMAGE_WIDTH
+    max_h = MAX_IMAGE_HEIGHT
+    if img.width <= max_w and img.height <= max_h:
+        return [img]
+
+    parts: List[Image.Image] = []
+    y = 0
+    while y < img.height:
+        h = min(max_h, img.height - y)
+        crop = img.crop((0, y, img.width, y + h))
+        parts.append(crop)
+        y += h
+    return parts
+
+
+def _image_to_bytes_list(img: Image.Image) -> List[bytes]:
+    return [_fit_image_bytes(p) for p in _split_image(img)]
+
+
+def render_sheet_range_images(sheets, tab_name: str, a1_range: str) -> List[bytes]:
+    img = render_sheet_range_image(sheets, tab_name, a1_range)
+    return _image_to_bytes_list(img)
+
+
+def stack_images_vertically(images: List[Image.Image], padding: int = 8) -> Image.Image:
+    imgs = [i for i in images if i]
+    if not imgs:
+        return Image.new("RGB", (400, 60), "white")
+
+    width = max(i.width for i in imgs)
+    height = sum(i.height for i in imgs) + padding * (len(imgs) - 1)
     combined = Image.new("RGB", (width, height), "white")
 
     y = 0
-    for img in pil_images:
+    for img in imgs:
         combined.paste(img, (0, y))
         y += img.height + padding
 
-    buf = io.BytesIO()
-    combined.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
+    return combined
 
 
 def seatalk_post(payload: Dict) -> None:
@@ -485,8 +541,11 @@ def send_seatalk_image(image_bytes: bytes) -> None:
     seatalk_post({"tag": "image", "image_base64": {"content": encoded}})
 
 
-def send_seatalk_text(text: str) -> None:
-    seatalk_post({"tag": "text", "text": {"content": text}})
+def send_seatalk_text(text: str, at_all: bool = False) -> None:
+    payload = {"tag": "text", "text": {"content": text, "format": 2}}
+    if at_all:
+        payload["text"]["at_all"] = True
+    seatalk_post(payload)
 
 
 def send_dashboard_images(sheets, sent_ts_pht: str) -> None:
@@ -494,14 +553,14 @@ def send_dashboard_images(sheets, sent_ts_pht: str) -> None:
         return
 
     images: List[bytes] = []
-    images.append(render_sheet_range_image(sheets, "Backlogs Summary", "B2:R63"))
-    images.append(render_sheet_range_image(sheets, "[SOC5] SOCPacked_Dashboard", "A1:T29"))
+    images.extend(render_sheet_range_images(sheets, "Backlogs Summary", "B2:R63"))
+    images.extend(render_sheet_range_images(sheets, "[SOC5] SOCPacked_Dashboard", "A1:T29"))
 
     header_img = render_sheet_range_image(sheets, "[SOC5] SOCPacked_Dashboard", "A1:U9")
     for cont_range in ["A30:U48", "A50:U94", "A95:U127", "A129:U157"]:
         cont_img = render_sheet_range_image(sheets, "[SOC5] SOCPacked_Dashboard", cont_range)
-        combined = stack_images_vertically([header_img, cont_img], padding=8)
-        images.append(combined)
+        combined = stack_images_vertically([header_img, cont_img], padding=max(2, int(8 * IMAGE_SCALE)))
+        images.extend(_image_to_bytes_list(combined))
 
     for idx, image_bytes in enumerate(images, start=1):
         try:
@@ -512,7 +571,8 @@ def send_dashboard_images(sheets, sent_ts_pht: str) -> None:
 
     try:
         send_seatalk_text(
-            f"{{mention @all}} Sharing OB Pending for dispatch as of {sent_ts_pht}. Thank you!"
+            f"Sharing OB Pending for dispatch as of {sent_ts_pht}. Thank you!",
+            at_all=True,
         )
         log("SeaTalk text sent.")
     except Exception as exc:
