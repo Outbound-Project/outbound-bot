@@ -7,3 +7,4 @@ pillow
 pytest
 ruff
 upstash-redis
+redis

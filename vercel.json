@@ -7,7 +7,7 @@
   },
   "crons": [
     {
-      "path": "/watch/auto-renew",
+      "path": "/backlogs/watch/auto-renew",
       "schedule": "0 16 * * *"
     }
   ],

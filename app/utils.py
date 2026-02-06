@@ -6,6 +6,7 @@ import json
 import os
 import time
 from typing import Dict, Iterable
+from urllib.parse import urlparse
 
 from googleapiclient.errors import HttpError
 
@@ -15,15 +16,29 @@ _kv_client = None
 
 def _get_kv_client():
     global _kv_client
-    url = os.environ.get("UPSTASH_REDIS_REST_URL") or os.environ.get("KV_REST_API_URL")
-    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
-    if not url or not token:
-        return None
-    if _kv_client is None:
-        from upstash_redis import Redis
+    rest_url = os.environ.get("UPSTASH_REDIS_REST_URL") or os.environ.get("KV_REST_API_URL")
+    rest_token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
+    redis_url = os.environ.get("UPSTASH_REDIS_URL") or os.environ.get("REDIS_URL")
 
-        _kv_client = Redis(url=url, token=token)
-    return _kv_client
+    if rest_url:
+        scheme = urlparse(rest_url).scheme.lower()
+        if scheme in {"http", "https"} and rest_token:
+            if _kv_client is None:
+                from upstash_redis import Redis
+
+                _kv_client = Redis(url=rest_url, token=rest_token)
+            return _kv_client
+
+    if redis_url:
+        scheme = urlparse(redis_url).scheme.lower()
+        if scheme in {"redis", "rediss"}:
+            if _kv_client is None:
+                import redis
+
+                _kv_client = redis.Redis.from_url(redis_url)
+            return _kv_client
+
+    return None
 
 
 def _default_state() -> Dict:

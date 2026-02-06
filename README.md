@@ -53,8 +53,9 @@ Shared:
 - `MAX_IMAGE_BYTES`: Max image bytes (default: `4700000`).
 - `STATE_PATH`: Path to state file (default: system temp `state.json`).
 - `ALLOW_INSECURE_WEBHOOK`: `true`/`false` (default: `false`).
-- `UPSTASH_REDIS_REST_URL` or `KV_REST_API_URL`: If set, state is stored in Vercel KV (Upstash).
-- `UPSTASH_REDIS_REST_TOKEN` or `KV_REST_API_TOKEN`: Token for Vercel KV (Upstash).
+- `UPSTASH_REDIS_REST_URL` or `KV_REST_API_URL`: REST URL for Vercel KV (preferred).
+- `UPSTASH_REDIS_REST_TOKEN` or `KV_REST_API_TOKEN`: REST token for Vercel KV (preferred).
+- `UPSTASH_REDIS_URL` or `REDIS_URL`: Redis URL (rediss://) if REST vars are not available.
 - `STATE_KEY`: Optional KV key name (default: `outbound-bot:state`).
 
 ## Run Locally
