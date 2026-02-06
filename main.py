@@ -3,11 +3,14 @@ import json
 import os
 import uuid
 import zipfile
+from base64 import b64encode
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List
+from urllib import request as urlrequest
 
 import pandas as pd
 from flask import Flask, jsonify, request
+from PIL import Image, ImageDraw, ImageFont
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -23,6 +26,7 @@ WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 WEBHOOK_TOKEN = os.environ.get("WEBHOOK_TOKEN", "")
 BACKLOGS_STATUS_TAB = "Backlogs Summary"
 BACKLOGS_STATUS_CELL = "F3"
+SEATALK_WEBHOOK_URL = os.environ.get("SEATALK_WEBHOOK_URL", "")
 
 FILTERS = {
     "Receiver type": "Station",
@@ -185,6 +189,110 @@ def overwrite_sheet(sheets, values):
     ).execute()
 
 
+def get_range_values(sheets, tab_name: str, a1_range: str) -> List[List[str]]:
+    safe = tab_name.replace("'", "''")
+    res = sheets.spreadsheets().values().get(
+        spreadsheetId=DEST_SHEET_ID,
+        range=f"'{safe}'!{a1_range}",
+    ).execute()
+    return res.get("values", [])
+
+
+def normalize_table(values: List[List[str]]) -> List[List[str]]:
+    if not values:
+        return [["(no data)"]]
+    max_cols = max(len(row) for row in values)
+    normalized = []
+    for row in values:
+        padded = row + [""] * (max_cols - len(row))
+        normalized.append(padded)
+    return normalized
+
+
+def render_table_image(values: List[List[str]]) -> bytes:
+    values = normalize_table(values)
+    font = ImageFont.load_default()
+    char_px = max(6, int(font.getlength("W")))
+    max_cell_chars = 18
+    cell_padding = 4
+    row_height = 20
+
+    col_count = len(values[0])
+    col_widths = []
+    for col in range(col_count):
+        max_len = max(len(str(row[col])) for row in values)
+        max_len = min(max_len, max_cell_chars)
+        col_widths.append(max_len * char_px + cell_padding * 2)
+
+    width = sum(col_widths) + 1
+    height = len(values) * row_height + 1
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+
+    y = 0
+    for row in values:
+        x = 0
+        for idx, cell in enumerate(row):
+            draw.rectangle([x, y, x + col_widths[idx], y + row_height], outline="#d9d9d9")
+            text = str(cell)
+            if len(text) > max_cell_chars:
+                text = text[: max_cell_chars - 1] + "…"
+            draw.text((x + cell_padding, y + 3), text, fill="#111111", font=font)
+            x += col_widths[idx]
+        y += row_height
+
+    max_width = 2000
+    max_height = 1400
+    if img.width > max_width or img.height > max_height:
+        ratio = min(max_width / img.width, max_height / img.height)
+        new_size = (int(img.width * ratio), int(img.height * ratio))
+        resample = getattr(getattr(Image, "Resampling", None), "LANCZOS", 3)
+        img = img.resize(new_size, resample)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def seatalk_post(payload: Dict) -> None:
+    if not SEATALK_WEBHOOK_URL:
+        return
+    data = json.dumps(payload).encode("utf-8")
+    req = urlrequest.Request(
+        SEATALK_WEBHOOK_URL,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlrequest.urlopen(req, timeout=30) as resp:
+        if resp.status >= 400:
+            raise RuntimeError(f"SeaTalk webhook failed: {resp.status}")
+
+
+def send_seatalk_image(image_bytes: bytes) -> None:
+    encoded = b64encode(image_bytes).decode("ascii")
+    seatalk_post({"tag": "image", "image_base64": {"content": encoded}})
+
+
+def send_dashboard_images(sheets) -> None:
+    if not SEATALK_WEBHOOK_URL:
+        return
+
+    images: List[List[List[str]]] = []
+    images.append(get_range_values(sheets, "Backlogs Summary", "B2:R63"))
+    images.append(get_range_values(sheets, "[SOC5] SOCPacked_Dashboard", "A1:T29"))
+
+    header = get_range_values(sheets, "[SOC5] SOCPacked_Dashboard", "A1:U9")
+    for cont_range in ["A30:U48", "A50:U94", "A95:U127", "A129:U157"]:
+        cont = get_range_values(sheets, "[SOC5] SOCPacked_Dashboard", cont_range)
+        combined = header + [[""]] + cont
+        images.append(combined)
+
+    for values in images:
+        image_bytes = render_table_image(values)
+        send_seatalk_image(image_bytes)
+
+
 def update_backlogs_status(sheets, value: str):
     safe = BACKLOGS_STATUS_TAB.replace("'", "''")
     sheets.spreadsheets().values().update(
@@ -266,6 +374,7 @@ def process_folder(drive, sheets, folder_id: str, state: Dict, ignore_last_dt: b
     save_state(state)
 
     update_backlogs_status(sheets, now_display)
+    send_dashboard_images(sheets)
     print("Import complete.")
 
 
