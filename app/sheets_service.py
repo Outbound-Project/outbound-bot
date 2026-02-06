@@ -13,7 +13,7 @@ import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 from googleapiclient.discovery import build
 
-from .config import AppConfig, build_credentials
+from .config import AppConfig, WorkflowConfig, build_credentials
 from .utils import format_status_timestamp, log, with_retries
 
 
@@ -87,12 +87,12 @@ def process_zip(zip_bytes: bytes) -> List[List[str]]:
     return rows
 
 
-def overwrite_sheet(sheets, config: AppConfig, values: List[List[str]]) -> None:
-    safe = config.dest_sheet_tab_name.replace("'", "''")
+def overwrite_sheet(sheets, workflow: WorkflowConfig, values: List[List[str]]) -> None:
+    safe = workflow.dest_sheet_tab_name.replace("'", "''")
 
     with_retries(
         lambda: sheets.spreadsheets().values().clear(
-            spreadsheetId=config.dest_sheet_id,
+            spreadsheetId=workflow.dest_sheet_id,
             range=f"'{safe}'!A:J",
             body={},
         ).execute(),
@@ -101,7 +101,7 @@ def overwrite_sheet(sheets, config: AppConfig, values: List[List[str]]) -> None:
 
     with_retries(
         lambda: sheets.spreadsheets().values().update(
-            spreadsheetId=config.dest_sheet_id,
+            spreadsheetId=workflow.dest_sheet_id,
             range=f"'{safe}'!A1:J",
             valueInputOption="RAW",
             body={"values": values},
@@ -110,11 +110,11 @@ def overwrite_sheet(sheets, config: AppConfig, values: List[List[str]]) -> None:
     )
 
 
-def clear_destination_sheet(sheets, config: AppConfig, state: Dict | None = None) -> None:
-    safe = config.dest_sheet_tab_name.replace("'", "''")
+def clear_destination_sheet(sheets, workflow: WorkflowConfig, state: Dict | None = None) -> None:
+    safe = workflow.dest_sheet_tab_name.replace("'", "''")
     with_retries(
         lambda: sheets.spreadsheets().values().clear(
-            spreadsheetId=config.dest_sheet_id,
+            spreadsheetId=workflow.dest_sheet_id,
             range=f"'{safe}'!A:J",
             body={},
         ).execute(),
@@ -127,12 +127,12 @@ def clear_destination_sheet(sheets, config: AppConfig, state: Dict | None = None
         state["last_run"] = datetime.now(timezone.utc).isoformat()
 
 
-def update_backlogs_status(sheets, config: AppConfig, value: str) -> None:
-    safe = config.backlogs_status_tab.replace("'", "''")
+def update_backlogs_status(sheets, workflow: WorkflowConfig, value: str) -> None:
+    safe = workflow.backlogs_status_tab.replace("'", "''")
     with_retries(
         lambda: sheets.spreadsheets().values().update(
-            spreadsheetId=config.dest_sheet_id,
-            range=f"'{safe}'!{config.backlogs_status_cell}",
+            spreadsheetId=workflow.dest_sheet_id,
+            range=f"'{safe}'!{workflow.backlogs_status_cell}",
             valueInputOption="RAW",
             body={"values": [[value]]},
         ).execute(),
@@ -140,10 +140,10 @@ def update_backlogs_status(sheets, config: AppConfig, value: str) -> None:
     )
 
 
-def append_rows_to_sheet(sheets, config: AppConfig, new_rows: List[List[str]]) -> None:
+def append_rows_to_sheet(sheets, workflow: WorkflowConfig, new_rows: List[List[str]]) -> None:
     header = COLUMNS
     all_rows = [header] + new_rows
-    overwrite_sheet(sheets, config, all_rows)
+    overwrite_sheet(sheets, workflow, all_rows)
 
 
 _font_cache: Dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
@@ -176,10 +176,10 @@ def _color_from_google(color: Dict, default: tuple[int, int, int]) -> tuple[int,
     return (r, g, b)
 
 
-def _get_grid_data(sheets, config: AppConfig, tab_name: str, a1_range: str, ttl_seconds: int = 60) -> Dict:
+def _get_grid_data(sheets, workflow: WorkflowConfig, tab_name: str, a1_range: str, ttl_seconds: int = 60) -> Dict:
     safe = tab_name.replace("'", "''")
     range_ref = f"'{safe}'!{a1_range}"
-    cache_key = (id(sheets), range_ref, config.dest_sheet_id)
+    cache_key = (id(sheets), range_ref, workflow.dest_sheet_id)
     cached = _cache_get(cache_key, ttl_seconds)
     if cached is not None:
         return cached
@@ -198,7 +198,7 @@ def _get_grid_data(sheets, config: AppConfig, tab_name: str, a1_range: str, ttl_
     )
     res = with_retries(
         lambda: sheets.spreadsheets().get(
-            spreadsheetId=config.dest_sheet_id,
+            spreadsheetId=workflow.dest_sheet_id,
             ranges=[range_ref],
             includeGridData=True,
             fields=fields,
@@ -235,12 +235,12 @@ def _build_merge_map(merges: List[Dict], start_row: int, start_col: int, row_cou
     return merge_map
 
 
-def _get_font(config: AppConfig, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def _get_font(workflow: WorkflowConfig, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     cached = _font_cache.get(size)
     if cached is not None:
         return cached
     try:
-        font = ImageFont.truetype(config.font_path, size)
+        font = ImageFont.truetype(workflow.font_path, size)
     except Exception:
         font = ImageFont.load_default()
     _font_cache[size] = font
@@ -255,8 +255,8 @@ def _font_height(font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
         return 12
 
 
-def render_sheet_range_image(sheets, config: AppConfig, tab_name: str, a1_range: str) -> Image.Image:
-    sheet = _get_grid_data(sheets, config, tab_name, a1_range)
+def render_sheet_range_image(sheets, workflow: WorkflowConfig, tab_name: str, a1_range: str) -> Image.Image:
+    sheet = _get_grid_data(sheets, workflow, tab_name, a1_range)
     if not sheet:
         img = Image.new("RGB", (400, 60), "white")
         draw = ImageDraw.Draw(img)
@@ -273,7 +273,7 @@ def render_sheet_range_image(sheets, config: AppConfig, tab_name: str, a1_range:
     row_count = len(row_data)
     col_count = max((len(r.get("values", [])) for r in row_data), default=0)
 
-    scale = config.image_scale
+    scale = workflow.image_scale
     row_heights = []
     for idx in range(row_count):
         px = row_meta[idx].get("pixelSize") if idx < len(row_meta) else None
@@ -333,8 +333,8 @@ def render_sheet_range_image(sheets, config: AppConfig, tab_name: str, a1_range:
             tf = eff.get("textFormat", {})
             fg = _color_from_google(tf.get("foregroundColor"), (17, 17, 17))
             bold = bool(tf.get("bold"))
-            font_size = int(tf.get("fontSize", config.base_font_size) * scale)
-            font = _get_font(config, max(8, font_size))
+            font_size = int(tf.get("fontSize", workflow.base_font_size) * scale)
+            font = _get_font(workflow, max(8, font_size))
             text_h = _font_height(font)
 
             align = eff.get("horizontalAlignment", "LEFT")
@@ -378,7 +378,7 @@ def _encode_image(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def _fit_image_bytes(config: AppConfig, img: Image.Image) -> bytes:
+def _fit_image_bytes(workflow: WorkflowConfig, img: Image.Image) -> bytes:
     scale = 1.0
     for _ in range(6):
         if scale < 1.0:
@@ -387,15 +387,15 @@ def _fit_image_bytes(config: AppConfig, img: Image.Image) -> bytes:
         else:
             resized = img
         data = _encode_image(resized)
-        if len(data) <= config.max_image_bytes:
+        if len(data) <= workflow.max_image_bytes:
             return data
         scale *= 0.85
     return _encode_image(img)
 
 
-def _split_image(config: AppConfig, img: Image.Image) -> List[Image.Image]:
-    max_w = config.max_image_width
-    max_h = config.max_image_height
+def _split_image(workflow: WorkflowConfig, img: Image.Image) -> List[Image.Image]:
+    max_w = workflow.max_image_width
+    max_h = workflow.max_image_height
     if img.width <= max_w and img.height <= max_h:
         return [img]
 
@@ -409,13 +409,13 @@ def _split_image(config: AppConfig, img: Image.Image) -> List[Image.Image]:
     return parts
 
 
-def _image_to_bytes_list(config: AppConfig, img: Image.Image) -> List[bytes]:
-    return [_fit_image_bytes(config, p) for p in _split_image(config, img)]
+def _image_to_bytes_list(workflow: WorkflowConfig, img: Image.Image) -> List[bytes]:
+    return [_fit_image_bytes(workflow, p) for p in _split_image(workflow, img)]
 
 
-def render_sheet_range_images(sheets, config: AppConfig, tab_name: str, a1_range: str) -> List[bytes]:
-    img = render_sheet_range_image(sheets, config, tab_name, a1_range)
-    return _image_to_bytes_list(config, img)
+def render_sheet_range_images(sheets, workflow: WorkflowConfig, tab_name: str, a1_range: str) -> List[bytes]:
+    img = render_sheet_range_image(sheets, workflow, tab_name, a1_range)
+    return _image_to_bytes_list(workflow, img)
 
 
 def stack_images_vertically(images: List[Image.Image], padding: int = 8) -> Image.Image:
@@ -435,12 +435,12 @@ def stack_images_vertically(images: List[Image.Image], padding: int = 8) -> Imag
     return combined
 
 
-def seatalk_post(config: AppConfig, payload: Dict) -> None:
-    if not config.seatalk_webhook_url:
+def seatalk_post(workflow: WorkflowConfig, payload: Dict) -> None:
+    if not workflow.seatalk_webhook_url:
         return
     data = json.dumps(payload).encode("utf-8")
     req = urlrequest.Request(
-        config.seatalk_webhook_url,
+        workflow.seatalk_webhook_url,
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -450,42 +450,42 @@ def seatalk_post(config: AppConfig, payload: Dict) -> None:
             raise RuntimeError(f"SeaTalk webhook failed: {resp.status}")
 
 
-def send_seatalk_image(config: AppConfig, image_bytes: bytes) -> None:
+def send_seatalk_image(workflow: WorkflowConfig, image_bytes: bytes) -> None:
     encoded = b64encode(image_bytes).decode("ascii")
-    seatalk_post(config, {"tag": "image", "image_base64": {"content": encoded}})
+    seatalk_post(workflow, {"tag": "image", "image_base64": {"content": encoded}})
 
 
-def send_seatalk_text(config: AppConfig, text: str, at_all: bool = False) -> None:
+def send_seatalk_text(workflow: WorkflowConfig, text: str, at_all: bool = False) -> None:
     payload = {"tag": "text", "text": {"content": text, "format": 2}}
     if at_all:
         payload["text"]["at_all"] = True
-    seatalk_post(config, payload)
+    seatalk_post(workflow, payload)
 
 
-def send_dashboard_images(sheets, config: AppConfig, sent_ts_pht: str) -> None:
-    if not config.seatalk_webhook_url:
+def send_dashboard_images(sheets, workflow: WorkflowConfig, sent_ts_pht: str) -> None:
+    if not workflow.seatalk_webhook_url:
         return
 
     images: List[bytes] = []
-    images.extend(render_sheet_range_images(sheets, config, "Backlogs Summary", "B2:R63"))
-    images.extend(render_sheet_range_images(sheets, config, "[SOC5] SOCPacked_Dashboard", "A1:T29"))
+    images.extend(render_sheet_range_images(sheets, workflow, "Backlogs Summary", "B2:R63"))
+    images.extend(render_sheet_range_images(sheets, workflow, "[SOC5] SOCPacked_Dashboard", "A1:T29"))
 
-    header_img = render_sheet_range_image(sheets, config, "[SOC5] SOCPacked_Dashboard", "A1:U9")
+    header_img = render_sheet_range_image(sheets, workflow, "[SOC5] SOCPacked_Dashboard", "A1:U9")
     for cont_range in ["A30:U48", "A50:U94", "A95:U127", "A129:U157"]:
-        cont_img = render_sheet_range_image(sheets, config, "[SOC5] SOCPacked_Dashboard", cont_range)
-        combined = stack_images_vertically([header_img, cont_img], padding=max(2, int(8 * config.image_scale)))
-        images.extend(_image_to_bytes_list(config, combined))
+        cont_img = render_sheet_range_image(sheets, workflow, "[SOC5] SOCPacked_Dashboard", cont_range)
+        combined = stack_images_vertically([header_img, cont_img], padding=max(2, int(8 * workflow.image_scale)))
+        images.extend(_image_to_bytes_list(workflow, combined))
 
     for idx, image_bytes in enumerate(images, start=1):
         try:
-            send_seatalk_image(config, image_bytes)
+            send_seatalk_image(workflow, image_bytes)
             log(f"SeaTalk image sent {idx}/{len(images)}.")
         except Exception as exc:
             log(f"SeaTalk image failed {idx}/{len(images)}: {exc}")
 
     try:
         send_seatalk_text(
-            config,
+            workflow,
             f"Sharing OB Pending for dispatch as of {sent_ts_pht}. Thank you!",
             at_all=True,
         )

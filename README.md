@@ -8,9 +8,13 @@
 3. Install dependencies:
    - `pip install -r requirements.txt`
 
-## Required Environment Variables
-- `DRIVE_PARENT_FOLDER_ID`: Google Drive folder ID containing source ZIP files.
-- `DEST_SHEET_ID`: Google Sheets spreadsheet ID for output.
+## Required Environment Variables (Backlogs Workflow)
+- `BACKLOGS_DRIVE_PARENT_FOLDER_ID`: Google Drive folder ID containing source ZIP files.
+- `BACKLOGS_DEST_SHEET_ID`: Google Sheets spreadsheet ID for output.
+
+Backward compatible aliases (still accepted for backlogs only):
+- `DRIVE_PARENT_FOLDER_ID`
+- `DEST_SHEET_ID`
 
 ## Recommended Environment Variables
 - `SERVICE_ACCOUNT_FILE`: Path to service account JSON (default: `creds/service_account.json`).
@@ -20,12 +24,27 @@
 - `APP_ENV`: `development` (default) or `production`.
 
 ## Optional Environment Variables
-- `DEST_SHEET_TAB_NAME`: Sheet tab name (default: `socpacked_generated_data`).
-- `FORCE_OVERWRITE`: `true`/`false` (default: `true`).
+Backlogs workflow (prefix with `BACKLOGS_`):
+- `BACKLOGS_DEST_SHEET_TAB_NAME`: Sheet tab name (default: `socpacked_generated_data`).
+- `BACKLOGS_FORCE_OVERWRITE`: `true`/`false` (default: `true`).
 - `BACKLOGS_STATUS_TAB`: Status sheet tab (default: `Backlogs Summary`).
 - `BACKLOGS_STATUS_CELL`: Status cell (default: `F3`).
-- `SEATALK_WEBHOOK_URL`: SeaTalk webhook URL.
-- `SKIP_SEATALK_IMAGES`: `true`/`false` (default: `false`).
+- `BACKLOGS_SEATALK_WEBHOOK_URL`: SeaTalk webhook URL (falls back to `SEATALK_WEBHOOK_URL`).
+- `BACKLOGS_SKIP_SEATALK_IMAGES`: `true`/`false` (default: `false`).
+
+Workflow2 (prefix with `WORKFLOW2_`):
+- `WORKFLOW2_DRIVE_PARENT_FOLDER_ID`
+- `WORKFLOW2_DEST_SHEET_ID`
+- `WORKFLOW2_DEST_SHEET_TAB_NAME`
+- `WORKFLOW2_FORCE_OVERWRITE`
+- `WORKFLOW2_STATUS_TAB`
+- `WORKFLOW2_STATUS_CELL`
+- `WORKFLOW2_SEATALK_WEBHOOK_URL`
+- `WORKFLOW2_SKIP_SEATALK_IMAGES`
+
+Shared:
+- `SEATALK_WEBHOOK_URL`: Default SeaTalk webhook URL.
+- `SKIP_SEATALK_IMAGES`: Default `true`/`false`.
 - `FONT_PATH`: Font path (default: `assets/fonts/Inter.ttf`).
 - `BASE_FONT_SIZE`: Default font size (default: `14`).
 - `IMAGE_SCALE`: Image scale factor (default: `3`).
@@ -45,6 +64,13 @@ The HTTP server is exposed via the `api/main.py` entrypoint when deployed (Verce
 
 ## Health Check
 - `GET /health`
+
+## Workflow Routes
+Backlogs (default):
+- `/backlogs/run`, `/backlogs/webhook`, `/backlogs/watch`, `/backlogs/watch/renew`, `/backlogs/watch/status`
+
+Workflow2 (optional, if configured):
+- `/workflow2/run`, `/workflow2/webhook`, `/workflow2/watch`, `/workflow2/watch/renew`, `/workflow2/watch/status`
 
 ## Tests
 - `pytest`

@@ -4,13 +4,15 @@ from app.config import get_config, validate_config
 
 
 def _base_env(monkeypatch):
-    monkeypatch.setenv("DRIVE_PARENT_FOLDER_ID", "folder123")
-    monkeypatch.setenv("DEST_SHEET_ID", "sheet123")
+    monkeypatch.setenv("BACKLOGS_DRIVE_PARENT_FOLDER_ID", "folder123")
+    monkeypatch.setenv("BACKLOGS_DEST_SHEET_ID", "sheet123")
 
 
 def test_validate_config_requires_missing(monkeypatch):
     monkeypatch.delenv("DRIVE_PARENT_FOLDER_ID", raising=False)
     monkeypatch.delenv("DEST_SHEET_ID", raising=False)
+    monkeypatch.delenv("BACKLOGS_DRIVE_PARENT_FOLDER_ID", raising=False)
+    monkeypatch.delenv("BACKLOGS_DEST_SHEET_ID", raising=False)
     config = get_config()
     with pytest.raises(ValueError):
         validate_config(config)

@@ -37,10 +37,10 @@ def _default_state() -> Dict:
     }
 
 
-def load_state(state_path: str) -> Dict:
+def load_state(state_path: str, state_key: str | None = None) -> Dict:
     client = _get_kv_client()
     if client is not None:
-        key = os.environ.get("STATE_KEY", "outbound-bot:state")
+        key = state_key or os.environ.get("STATE_KEY", "outbound-bot:state")
         try:
             data = client.get(key)
             if not data:
@@ -62,10 +62,10 @@ def load_state(state_path: str) -> Dict:
         return _default_state()
 
 
-def save_state(state_path: str, state: Dict) -> None:
+def save_state(state_path: str, state: Dict, state_key: str | None = None) -> None:
     client = _get_kv_client()
     if client is not None:
-        key = os.environ.get("STATE_KEY", "outbound-bot:state")
+        key = state_key or os.environ.get("STATE_KEY", "outbound-bot:state")
         client.set(key, json.dumps(state))
         return
 
