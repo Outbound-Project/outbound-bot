@@ -55,6 +55,9 @@ def create_app() -> Flask:
                 res = register_changes_watch(drive, workflow, state)
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
+            except Exception as exc:
+                log(f"{workflow.name} watch error: {exc}")
+                return jsonify({"error": "watch registration failed"}), 500
             return jsonify(res), 200
 
         @app.get(f"{route_prefix}/watch/status", endpoint=f"{prefix}_watch_status")
@@ -80,6 +83,9 @@ def create_app() -> Flask:
                 res = register_changes_watch(drive, workflow, state)
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
+            except Exception as exc:
+                log(f"{workflow.name} watch renew error: {exc}")
+                return jsonify({"error": "watch renewal failed"}), 500
             return jsonify(res), 200
 
         @app.post(f"{route_prefix}/watch/auto-renew", endpoint=f"{prefix}_watch_auto_renew")
@@ -93,6 +99,9 @@ def create_app() -> Flask:
                 res = register_changes_watch(drive, workflow, state)
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
+            except Exception as exc:
+                log(f"{workflow.name} watch auto-renew error: {exc}")
+                return jsonify({"error": "watch auto-renew failed"}), 500
             return jsonify({"ok": True, "channel_id": res.get("id"), "expiration": res.get("expiration")}), 200
 
         @app.post(f"{route_prefix}/run", endpoint=f"{prefix}_run")
@@ -172,6 +181,9 @@ def create_app() -> Flask:
             res = register_changes_watch(drive, backlogs, state)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            log(f"backlogs watch error: {exc}")
+            return jsonify({"error": "watch registration failed"}), 500
         return jsonify(res), 200
 
     @app.get("/watch/status")
@@ -197,6 +209,9 @@ def create_app() -> Flask:
             res = register_changes_watch(drive, backlogs, state)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            log(f"backlogs watch renew error: {exc}")
+            return jsonify({"error": "watch renewal failed"}), 500
         return jsonify(res), 200
 
     @app.post("/watch/auto-renew")
@@ -210,6 +225,9 @@ def create_app() -> Flask:
             res = register_changes_watch(drive, backlogs, state)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            log(f"backlogs watch auto-renew error: {exc}")
+            return jsonify({"error": "watch auto-renew failed"}), 500
         return jsonify({"ok": True, "channel_id": res.get("id"), "expiration": res.get("expiration")}), 200
 
     @app.post("/run")
