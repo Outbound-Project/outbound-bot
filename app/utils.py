@@ -3,28 +3,72 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 import time
 from typing import Dict, Iterable
 
 from googleapiclient.errors import HttpError
 
 
+_kv_client = None
+
+
+def _get_kv_client():
+    global _kv_client
+    url = os.environ.get("UPSTASH_REDIS_REST_URL") or os.environ.get("KV_REST_API_URL")
+    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN")
+    if not url or not token:
+        return None
+    if _kv_client is None:
+        from upstash_redis import Redis
+
+        _kv_client = Redis(url=url, token=token)
+    return _kv_client
+
+
+def _default_state() -> Dict:
+    return {
+        "processed_zip_ids": [],
+        "last_processed_zip_time": None,
+        "page_token": None,
+        "channel_id": None,
+        "channel_resource_id": None,
+        "channel_expiration": None,
+    }
+
+
 def load_state(state_path: str) -> Dict:
+    client = _get_kv_client()
+    if client is not None:
+        key = os.environ.get("STATE_KEY", "outbound-bot:state")
+        try:
+            data = client.get(key)
+            if not data:
+                return _default_state()
+            if isinstance(data, dict):
+                return data
+            if isinstance(data, bytes):
+                data = data.decode("utf-8")
+            if isinstance(data, str):
+                return json.loads(data)
+            return _default_state()
+        except Exception:
+            return _default_state()
+
     try:
         with open(state_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {
-            "processed_zip_ids": [],
-            "last_processed_zip_time": None,
-            "page_token": None,
-            "channel_id": None,
-            "channel_resource_id": None,
-            "channel_expiration": None,
-        }
+        return _default_state()
 
 
 def save_state(state_path: str, state: Dict) -> None:
+    client = _get_kv_client()
+    if client is not None:
+        key = os.environ.get("STATE_KEY", "outbound-bot:state")
+        client.set(key, json.dumps(state))
+        return
+
     with open(state_path, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 

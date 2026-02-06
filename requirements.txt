@@ -6,3 +6,4 @@ google-auth-httplib2
 pillow
 pytest
 ruff
+upstash-redis
