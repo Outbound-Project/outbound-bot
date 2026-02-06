@@ -31,11 +31,11 @@ BACKLOGS_STATUS_CELL = "F3"
 SEATALK_WEBHOOK_URL = os.environ.get("SEATALK_WEBHOOK_URL", "")
 SKIP_SEATALK_IMAGES = os.environ.get("SKIP_SEATALK_IMAGES", "").lower() in {"1", "true", "yes"}
 FONT_PATH = os.environ.get("FONT_PATH", "assets/fonts/Inter.ttf")
-BASE_FONT_SIZE = int(os.environ.get("BASE_FONT_SIZE", "12"))
-IMAGE_SCALE = float(os.environ.get("IMAGE_SCALE", "2"))
-MAX_IMAGE_WIDTH = int(os.environ.get("MAX_IMAGE_WIDTH", "4000"))
-MAX_IMAGE_HEIGHT = int(os.environ.get("MAX_IMAGE_HEIGHT", "4000"))
-MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", str(4 * 1024 * 1024)))
+BASE_FONT_SIZE = int(os.environ.get("BASE_FONT_SIZE", "14"))
+IMAGE_SCALE = float(os.environ.get("IMAGE_SCALE", "3"))
+MAX_IMAGE_WIDTH = int(os.environ.get("MAX_IMAGE_WIDTH", "7000"))
+MAX_IMAGE_HEIGHT = int(os.environ.get("MAX_IMAGE_HEIGHT", "9000"))
+MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", "4700000")))
 
 FILTERS = {
     "Receiver type": "Station",
@@ -624,15 +624,8 @@ def collect_rows_from_folder(drive, folder_id: str, state: Dict, ignore_last_dt:
 
 
 def append_rows_to_sheet(sheets, new_rows: List[List[str]]):
-    existing = get_existing_rows(sheets)
-    if existing:
-        header = existing[0]
-        base_rows = existing[1:]
-    else:
-        header = COLUMNS
-        base_rows = []
-
-    all_rows = [header] + base_rows + new_rows
+    header = COLUMNS
+    all_rows = [header] + new_rows
     overwrite_sheet(sheets, all_rows)
 
 
