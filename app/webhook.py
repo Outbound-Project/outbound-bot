@@ -126,11 +126,19 @@ def handle_drive_changes(drive, sheets, config: AppConfig, state: Dict) -> bool:
         for change in res.get("changes", []):
             file = change.get("file")
             if not file:
+                # If file metadata is missing, rely on tracked IDs.
+                file_id = change.get("fileId")
+                if file_id and file_id in state.get("processed_zip_ids", []):
+                    deleted_zip = True
                 continue
             if file.get("trashed"):
                 name = str(file.get("name", "")).lower()
                 parents = file.get("parents", []) or []
-                if name.endswith(".zip") and (not parents or config.drive_parent_folder_id in parents):
+                file_id = change.get("fileId") or file.get("id")
+                if (
+                    name.endswith(".zip")
+                    and (not parents or config.drive_parent_folder_id in parents)
+                ) or (file_id and file_id in state.get("processed_zip_ids", [])):
                     deleted_zip = True
                 continue
             parents = file.get("parents", [])
