@@ -285,7 +285,11 @@ def send_seatalk_image(image_bytes: bytes) -> None:
     seatalk_post({"tag": "image", "image_base64": {"content": encoded}})
 
 
-def send_dashboard_images(sheets) -> None:
+def send_seatalk_text(text: str) -> None:
+    seatalk_post({"tag": "text", "text": {"content": text}})
+
+
+def send_dashboard_images(sheets, sent_ts_pht: str) -> None:
     if not SEATALK_WEBHOOK_URL:
         return
 
@@ -302,6 +306,10 @@ def send_dashboard_images(sheets) -> None:
     for values in images:
         image_bytes = render_table_image(values)
         send_seatalk_image(image_bytes)
+
+    send_seatalk_text(
+        f"{{mention @all}} Sharing OB Pending for dispatch as of {sent_ts_pht}. Thank you!"
+    )
 
 
 def update_backlogs_status(sheets, value: str):
@@ -385,7 +393,7 @@ def process_folder(drive, sheets, folder_id: str, state: Dict, ignore_last_dt: b
     save_state(state)
 
     update_backlogs_status(sheets, now_display)
-    send_dashboard_images(sheets)
+    send_dashboard_images(sheets, now_display)
     print("Import complete.")
 
 
