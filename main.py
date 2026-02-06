@@ -3,7 +3,7 @@ import json
 import os
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 
 import pandas as pd
@@ -18,11 +18,11 @@ DRIVE_PARENT_FOLDER_ID = "1oU9kj5VIJIoNrR388wYCHSdtHGanRrgZ"
 
 DEST_SHEET_ID = "1QGrwNXNHIdUl1nT1mF5_6o9LefZqfPIs2fLuzae3Res"
 DEST_SHEET_TAB_NAME = "socpacked_generated_data"
-DEST_START_CELL = "A1"
 FORCE_OVERWRITE = True
-STATUS_TAB_NAME = "upload_status"
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 WEBHOOK_TOKEN = os.environ.get("WEBHOOK_TOKEN", "")
+BACKLOGS_STATUS_TAB = "Backlogs Summary"
+BACKLOGS_STATUS_CELL = "F3"
 
 FILTERS = {
     "Receiver type": "Station",
@@ -159,6 +159,15 @@ def parse_rfc3339(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+def format_status_timestamp(dt: datetime) -> str:
+    hour = dt.strftime("%I").lstrip("0") or "12"
+    minute = dt.strftime("%M")
+    ampm = dt.strftime("%p")
+    mon = dt.strftime("%b")
+    day = dt.strftime("%d").lstrip("0")
+    return f"{hour}:{minute} {ampm} {mon}-{day}"
+
+
 def overwrite_sheet(sheets, values):
     safe = DEST_SHEET_TAB_NAME.replace("'", "''")
 
@@ -176,11 +185,11 @@ def overwrite_sheet(sheets, values):
     ).execute()
 
 
-def update_status_cell(sheets, value: str):
-    safe = STATUS_TAB_NAME.replace("'", "''")
+def update_backlogs_status(sheets, value: str):
+    safe = BACKLOGS_STATUS_TAB.replace("'", "''")
     sheets.spreadsheets().values().update(
         spreadsheetId=DEST_SHEET_ID,
-        range=f"'{safe}'!A1",
+        range=f"'{safe}'!{BACKLOGS_STATUS_CELL}",
         valueInputOption="RAW",
         body={"values": [[value]]},
     ).execute()
@@ -231,15 +240,17 @@ def append_rows_to_sheet(sheets, new_rows: List[List[str]]):
 
 
 def process_folder(drive, sheets, folder_id: str, state: Dict, ignore_last_dt: bool):
-    update_status_cell(sheets, "Fetching Data, Please Wait..")
+    update_backlogs_status(sheets, "Fetching data...")
 
     result = collect_rows_from_folder(drive, folder_id, state, ignore_last_dt)
     new_rows = result["rows"]
     new_zip_ids = result["zip_ids"]
     max_dt = result["max_dt"]
+    pht = timezone(timedelta(hours=8))
+    now_display = format_status_timestamp(datetime.now(pht))
 
     if not new_rows:
-        update_status_cell(sheets, datetime.now(timezone.utc).isoformat())
+        update_backlogs_status(sheets, now_display)
         print("No new ZIPs to import.")
         return
 
@@ -254,7 +265,7 @@ def process_folder(drive, sheets, folder_id: str, state: Dict, ignore_last_dt: b
     state["last_run"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
 
-    update_status_cell(sheets, datetime.now(timezone.utc).isoformat())
+    update_backlogs_status(sheets, now_display)
     print("Import complete.")
 
 
