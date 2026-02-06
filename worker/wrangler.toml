@@ -3,7 +3,7 @@ main = "index.js"
 compatibility_date = "2026-02-01"
 
 [vars]
-FORWARD_URL = "https://outbound-lkje4gld8-marks-projects-66964b60.vercel.app"
+FORWARD_URL = "outbound-bot-mu.vercel.app"
 WEBHOOK_TOKEN = "s3cr3t-9b2c-4f1f-a1f0"
 
 [triggers]
