@@ -8,6 +8,7 @@ import time
 import zipfile
 from typing import Dict, List, Tuple
 from urllib import request as urlrequest
+import threading
 
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
@@ -147,6 +148,7 @@ def append_rows_to_sheet(sheets, workflow: WorkflowConfig, new_rows: List[List[s
 
 
 _font_cache: Dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
+_render_lock = threading.Lock()
 
 
 _grid_cache: Dict[Tuple[int, str, str], Tuple[float, Dict]] = {}
@@ -256,120 +258,121 @@ def _font_height(font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
 
 
 def render_sheet_range_image(sheets, workflow: WorkflowConfig, tab_name: str, a1_range: str) -> Image.Image:
-    sheet = _get_grid_data(sheets, workflow, tab_name, a1_range)
-    if not sheet:
-        img = Image.new("RGB", (400, 60), "white")
+    with _render_lock:
+        sheet = _get_grid_data(sheets, workflow, tab_name, a1_range)
+        if not sheet:
+            img = Image.new("RGB", (400, 60), "white")
+            draw = ImageDraw.Draw(img)
+            draw.text((10, 20), "No data", fill="#111111", font=ImageFont.load_default())
+            return img
+
+        data = sheet.get("data", [{}])[0]
+        row_data = data.get("rowData", [])
+        row_meta = data.get("rowMetadata", [])
+        col_meta = data.get("columnMetadata", [])
+        start_row = int(data.get("startRow", 0))
+        start_col = int(data.get("startColumn", 0))
+
+        row_count = len(row_data)
+        col_count = max((len(r.get("values", [])) for r in row_data), default=0)
+
+        scale = workflow.image_scale
+        row_heights = []
+        for idx in range(row_count):
+            px = row_meta[idx].get("pixelSize") if idx < len(row_meta) else None
+            base = int(px) if px else 21
+            row_heights.append(max(1, int(base * scale)))
+
+        col_widths = []
+        for idx in range(col_count):
+            px = col_meta[idx].get("pixelSize") if idx < len(col_meta) else None
+            base = int(px) if px else 100
+            col_widths.append(max(1, int(base * scale)))
+
+        width = sum(col_widths) + 1
+        height = sum(row_heights) + 1
+        img = Image.new("RGB", (width, height), "white")
         draw = ImageDraw.Draw(img)
-        draw.text((10, 20), "No data", fill="#111111", font=ImageFont.load_default())
-        return img
 
-    data = sheet.get("data", [{}])[0]
-    row_data = data.get("rowData", [])
-    row_meta = data.get("rowMetadata", [])
-    col_meta = data.get("columnMetadata", [])
-    start_row = int(data.get("startRow", 0))
-    start_col = int(data.get("startColumn", 0))
+        merges = _build_merge_map(sheet.get("merges", []), start_row, start_col, row_count, col_count)
 
-    row_count = len(row_data)
-    col_count = max((len(r.get("values", [])) for r in row_data), default=0)
+        y = 0
+        for r_idx in range(row_count):
+            x = 0
+            row_vals = row_data[r_idx].get("values", [])
+            for c_idx in range(col_count):
+                abs_r = start_row + r_idx
+                abs_c = start_col + c_idx
+                merge = merges.get((abs_r, abs_c))
+                if merge and (merge["start_row"] != abs_r or merge["start_col"] != abs_c):
+                    x += col_widths[c_idx]
+                    continue
 
-    scale = workflow.image_scale
-    row_heights = []
-    for idx in range(row_count):
-        px = row_meta[idx].get("pixelSize") if idx < len(row_meta) else None
-        base = int(px) if px else 21
-        row_heights.append(max(1, int(base * scale)))
+                cell_width = col_widths[c_idx]
+                cell_height = row_heights[r_idx]
+                if merge:
+                    cell_width = sum(
+                        col_widths[c - start_col]
+                        for c in range(merge["start_col"], merge["end_col"])
+                        if start_col <= c < start_col + col_count
+                    )
+                    cell_height = sum(
+                        row_heights[r - start_row]
+                        for r in range(merge["start_row"], merge["end_row"])
+                        if start_row <= r < start_row + row_count
+                    )
 
-    col_widths = []
-    for idx in range(col_count):
-        px = col_meta[idx].get("pixelSize") if idx < len(col_meta) else None
-        base = int(px) if px else 100
-        col_widths.append(max(1, int(base * scale)))
+                cell = row_vals[c_idx] if c_idx < len(row_vals) else {}
+                eff = cell.get("effectiveFormat", {})
+                bg = _color_from_google(eff.get("backgroundColor"), (255, 255, 255))
 
-    width = sum(col_widths) + 1
-    height = sum(row_heights) + 1
-    img = Image.new("RGB", (width, height), "white")
-    draw = ImageDraw.Draw(img)
+                draw.rectangle([x, y, x + cell_width, y + cell_height], fill=bg)
 
-    merges = _build_merge_map(sheet.get("merges", []), start_row, start_col, row_count, col_count)
+                text = cell.get("formattedValue")
+                if text is None:
+                    text = ""
+                text = str(text)
 
-    y = 0
-    for r_idx in range(row_count):
-        x = 0
-        row_vals = row_data[r_idx].get("values", [])
-        for c_idx in range(col_count):
-            abs_r = start_row + r_idx
-            abs_c = start_col + c_idx
-            merge = merges.get((abs_r, abs_c))
-            if merge and (merge["start_row"] != abs_r or merge["start_col"] != abs_c):
+                tf = eff.get("textFormat", {})
+                fg = _color_from_google(tf.get("foregroundColor"), (17, 17, 17))
+                bold = bool(tf.get("bold"))
+                font_size = int(tf.get("fontSize", workflow.base_font_size) * scale)
+                font = _get_font(workflow, max(8, font_size))
+                text_h = _font_height(font)
+
+                align = eff.get("horizontalAlignment", "LEFT")
+                pad = max(1, int(4 * scale))
+                text_w = int(font.getlength(text)) if text else 0
+                if align == "CENTER":
+                    tx = x + max(pad, (cell_width - text_w) // 2)
+                elif align == "RIGHT":
+                    tx = x + max(pad, cell_width - text_w - pad)
+                else:
+                    tx = x + pad
+                ty = y + max(2, (cell_height - text_h) // 2)
+
+                if text:
+                    draw.text((tx, ty), text, fill=fg, font=font)
+                    if bold:
+                        draw.text((tx + max(1, int(scale)), ty), text, fill=fg, font=font)
+
+                borders = eff.get("borders", {})
+                line_w = max(1, int(scale))
+                for side, x1, y1, x2, y2 in [
+                    ("top", x, y, x + cell_width, y),
+                    ("bottom", x, y + cell_height, x + cell_width, y + cell_height),
+                    ("left", x, y, x, y + cell_height),
+                    ("right", x + cell_width, y, x + cell_width, y + cell_height),
+                ]:
+                    b = borders.get(side)
+                    if b:
+                        color = _color_from_google(b.get("color"), (217, 217, 217))
+                        draw.line([x1, y1, x2, y2], fill=color, width=line_w)
+
                 x += col_widths[c_idx]
-                continue
+            y += row_heights[r_idx]
 
-            cell_width = col_widths[c_idx]
-            cell_height = row_heights[r_idx]
-            if merge:
-                cell_width = sum(
-                    col_widths[c - start_col]
-                    for c in range(merge["start_col"], merge["end_col"])
-                    if start_col <= c < start_col + col_count
-                )
-                cell_height = sum(
-                    row_heights[r - start_row]
-                    for r in range(merge["start_row"], merge["end_row"])
-                    if start_row <= r < start_row + row_count
-                )
-
-            cell = row_vals[c_idx] if c_idx < len(row_vals) else {}
-            eff = cell.get("effectiveFormat", {})
-            bg = _color_from_google(eff.get("backgroundColor"), (255, 255, 255))
-
-            draw.rectangle([x, y, x + cell_width, y + cell_height], fill=bg)
-
-            text = cell.get("formattedValue")
-            if text is None:
-                text = ""
-            text = str(text)
-
-            tf = eff.get("textFormat", {})
-            fg = _color_from_google(tf.get("foregroundColor"), (17, 17, 17))
-            bold = bool(tf.get("bold"))
-            font_size = int(tf.get("fontSize", workflow.base_font_size) * scale)
-            font = _get_font(workflow, max(8, font_size))
-            text_h = _font_height(font)
-
-            align = eff.get("horizontalAlignment", "LEFT")
-            pad = max(1, int(4 * scale))
-            text_w = int(font.getlength(text)) if text else 0
-            if align == "CENTER":
-                tx = x + max(pad, (cell_width - text_w) // 2)
-            elif align == "RIGHT":
-                tx = x + max(pad, cell_width - text_w - pad)
-            else:
-                tx = x + pad
-            ty = y + max(2, (cell_height - text_h) // 2)
-
-            if text:
-                draw.text((tx, ty), text, fill=fg, font=font)
-                if bold:
-                    draw.text((tx + max(1, int(scale)), ty), text, fill=fg, font=font)
-
-            borders = eff.get("borders", {})
-            line_w = max(1, int(scale))
-            for side, x1, y1, x2, y2 in [
-                ("top", x, y, x + cell_width, y),
-                ("bottom", x, y + cell_height, x + cell_width, y + cell_height),
-                ("left", x, y, x, y + cell_height),
-                ("right", x + cell_width, y, x + cell_width, y + cell_height),
-            ]:
-                b = borders.get(side)
-                if b:
-                    color = _color_from_google(b.get("color"), (217, 217, 217))
-                    draw.line([x1, y1, x2, y2], fill=color, width=line_w)
-
-            x += col_widths[c_idx]
-        y += row_heights[r_idx]
-
-    return img
+        return img
 
 
 def _encode_image(img: Image.Image) -> bytes:
