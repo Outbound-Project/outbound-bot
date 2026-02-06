@@ -233,6 +233,24 @@ def overwrite_sheet(sheets, values):
     )
 
 
+def clear_destination_sheet(sheets, state: Dict | None = None) -> None:
+    safe = DEST_SHEET_TAB_NAME.replace("'", "''")
+    _with_retries(
+        lambda: sheets.spreadsheets().values().clear(
+            spreadsheetId=DEST_SHEET_ID,
+            range=f"'{safe}'!A:J",
+            body={}
+        ).execute(),
+        "Sheets clear"
+    )
+    if state is not None:
+        state["processed_zip_ids"] = []
+        state["last_processed_zip_time"] = None
+        state["last_import_row_count"] = 0
+        state["last_run"] = datetime.now(timezone.utc).isoformat()
+        save_state(state)
+
+
 def _color_from_google(color: Dict, default: tuple[int, int, int]) -> tuple[int, int, int]:
     if not isinstance(color, dict):
         return default
@@ -624,6 +642,7 @@ def handle_drive_changes(drive, sheets, state: Dict) -> bool:
         return False
 
     changed = False
+    deleted_zip = False
     new_start_token = None
 
     while page_token:
@@ -643,6 +662,10 @@ def handle_drive_changes(drive, sheets, state: Dict) -> bool:
             if not file:
                 continue
             if file.get("trashed"):
+                name = str(file.get("name", "")).lower()
+                parents = file.get("parents", []) or []
+                if name.endswith(".zip") and (not parents or DRIVE_PARENT_FOLDER_ID in parents):
+                    deleted_zip = True
                 continue
             parents = file.get("parents", [])
             if DRIVE_PARENT_FOLDER_ID not in parents:
@@ -656,6 +679,11 @@ def handle_drive_changes(drive, sheets, state: Dict) -> bool:
     if new_start_token:
         state["page_token"] = new_start_token
         save_state(state)
+
+    if deleted_zip:
+        print("ZIP deleted in parent folder. Clearing destination sheet.")
+        clear_destination_sheet(sheets, state)
+        return True
 
     if changed:
         print("Change detected in parent folder. Scanning for new ZIPs.")
