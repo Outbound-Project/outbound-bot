@@ -5,6 +5,12 @@
       "maxDuration": 300
     }
   },
+  "crons": [
+    {
+      "path": "/watch/auto-renew",
+      "schedule": "0 16 * * *"
+    }
+  ],
   "routes": [
     { "src": "/(.*)", "dest": "api/main.py" }
   ]

@@ -79,6 +79,19 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 400
         return jsonify(res), 200
 
+    @app.post("/watch/auto-renew")
+    def watch_auto_renew():
+        auth_resp = require_webhook_auth(request, config)
+        if auth_resp:
+            return auth_resp
+        state = load_state(config.state_path)
+        drive = get_drive_client(config)
+        try:
+            res = register_changes_watch(drive, config, state)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "channel_id": res.get("id"), "expiration": res.get("expiration")}), 200
+
     @app.post("/run")
     def run_once():
         auth_resp = require_webhook_auth(request, config)
