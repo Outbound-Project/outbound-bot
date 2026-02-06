@@ -29,6 +29,7 @@ WEBHOOK_TOKEN = os.environ.get("WEBHOOK_TOKEN", "")
 BACKLOGS_STATUS_TAB = "Backlogs Summary"
 BACKLOGS_STATUS_CELL = "F3"
 SEATALK_WEBHOOK_URL = os.environ.get("SEATALK_WEBHOOK_URL", "")
+SKIP_SEATALK_IMAGES = os.environ.get("SKIP_SEATALK_IMAGES", "").lower() in {"1", "true", "yes"}
 
 FILTERS = {
     "Receiver type": "Station",
@@ -232,60 +233,182 @@ def overwrite_sheet(sheets, values):
     )
 
 
-def get_range_values(sheets, tab_name: str, a1_range: str) -> List[List[str]]:
+def _color_from_google(color: Dict, default: tuple[int, int, int]) -> tuple[int, int, int]:
+    if not isinstance(color, dict):
+        return default
+    r = int(round(255 * float(color.get("red", 0.0))))
+    g = int(round(255 * float(color.get("green", 0.0))))
+    b = int(round(255 * float(color.get("blue", 0.0))))
+    return (r, g, b)
+
+
+def _get_grid_data(sheets, tab_name: str, a1_range: str) -> Dict:
     safe = tab_name.replace("'", "''")
+    range_ref = f"'{safe}'!{a1_range}"
+    fields = ",".join(
+        [
+            "sheets.properties.sheetId",
+            "sheets.properties.title",
+            "sheets.merges",
+            "sheets.data.startRow",
+            "sheets.data.startColumn",
+            "sheets.data.rowMetadata.pixelSize",
+            "sheets.data.columnMetadata.pixelSize",
+            "sheets.data.rowData.values(formattedValue,effectiveValue,effectiveFormat)",
+        ]
+    )
     res = _with_retries(
-        lambda: sheets.spreadsheets().values().get(
+        lambda: sheets.spreadsheets().get(
             spreadsheetId=DEST_SHEET_ID,
-            range=f"'{safe}'!{a1_range}",
+            ranges=[range_ref],
+            includeGridData=True,
+            fields=fields,
         ).execute(),
-        "Sheets get range"
+        "Sheets get grid"
     ) or {}
-    return res.get("values", [])
+    sheets_data = res.get("sheets", [])
+    if not sheets_data:
+        return {}
+    return sheets_data[0]
 
 
-def normalize_table(values: List[List[str]]) -> List[List[str]]:
-    if not values:
-        return [["(no data)"]]
-    max_cols = max(len(row) for row in values)
-    normalized = []
-    for row in values:
-        padded = row + [""] * (max_cols - len(row))
-        normalized.append(padded)
-    return normalized
+def _build_merge_map(merges: List[Dict], start_row: int, start_col: int, row_count: int, col_count: int):
+    merge_map: Dict[tuple[int, int], Dict] = {}
+    for m in merges or []:
+        sr = m.get("startRowIndex", 0)
+        er = m.get("endRowIndex", 0)
+        sc = m.get("startColumnIndex", 0)
+        ec = m.get("endColumnIndex", 0)
+        if er <= start_row or sr >= start_row + row_count:
+            continue
+        if ec <= start_col or sc >= start_col + col_count:
+            continue
+        for r in range(sr, er):
+            for c in range(sc, ec):
+                merge_map[(r, c)] = {
+                    "start_row": sr,
+                    "end_row": er,
+                    "start_col": sc,
+                    "end_col": ec,
+                }
+    return merge_map
 
 
-def render_table_image(values: List[List[str]]) -> bytes:
-    values = normalize_table(values)
-    font = ImageFont.load_default()
-    char_px = max(6, int(font.getlength("W")))
-    max_cell_chars = 18
-    cell_padding = 4
-    row_height = 20
+def render_sheet_range_image(sheets, tab_name: str, a1_range: str) -> bytes:
+    sheet = _get_grid_data(sheets, tab_name, a1_range)
+    if not sheet:
+        img = Image.new("RGB", (400, 60), "white")
+        draw = ImageDraw.Draw(img)
+        draw.text((10, 20), "No data", fill="#111111", font=ImageFont.load_default())
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
 
-    col_count = len(values[0])
+    data = sheet.get("data", [{}])[0]
+    row_data = data.get("rowData", [])
+    row_meta = data.get("rowMetadata", [])
+    col_meta = data.get("columnMetadata", [])
+    start_row = int(data.get("startRow", 0))
+    start_col = int(data.get("startColumn", 0))
+
+    row_count = len(row_data)
+    col_count = max((len(r.get("values", [])) for r in row_data), default=0)
+
+    row_heights = []
+    for idx in range(row_count):
+        px = row_meta[idx].get("pixelSize") if idx < len(row_meta) else None
+        row_heights.append(int(px) if px else 21)
+
     col_widths = []
-    for col in range(col_count):
-        max_len = max(len(str(row[col])) for row in values)
-        max_len = min(max_len, max_cell_chars)
-        col_widths.append(max_len * char_px + cell_padding * 2)
+    for idx in range(col_count):
+        px = col_meta[idx].get("pixelSize") if idx < len(col_meta) else None
+        col_widths.append(int(px) if px else 100)
 
     width = sum(col_widths) + 1
-    height = len(values) * row_height + 1
+    height = sum(row_heights) + 1
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
 
+    default_font = ImageFont.load_default()
+    try:
+        _font_bbox = default_font.getbbox("Ag")
+        font_height = _font_bbox[3] - _font_bbox[1]
+    except Exception:
+        font_height = 12
+    merges = _build_merge_map(sheet.get("merges", []), start_row, start_col, row_count, col_count)
+
     y = 0
-    for row in values:
+    for r_idx in range(row_count):
         x = 0
-        for idx, cell in enumerate(row):
-            draw.rectangle([x, y, x + col_widths[idx], y + row_height], outline="#d9d9d9")
-            text = str(cell)
-            if len(text) > max_cell_chars:
-                text = text[: max_cell_chars - 1] + "…"
-            draw.text((x + cell_padding, y + 3), text, fill="#111111", font=font)
-            x += col_widths[idx]
-        y += row_height
+        row_vals = row_data[r_idx].get("values", [])
+        for c_idx in range(col_count):
+            abs_r = start_row + r_idx
+            abs_c = start_col + c_idx
+            merge = merges.get((abs_r, abs_c))
+            if merge and (merge["start_row"] != abs_r or merge["start_col"] != abs_c):
+                x += col_widths[c_idx]
+                continue
+
+            cell_width = col_widths[c_idx]
+            cell_height = row_heights[r_idx]
+            if merge:
+                cell_width = sum(
+                    col_widths[c - start_col]
+                    for c in range(merge["start_col"], merge["end_col"])
+                    if start_col <= c < start_col + col_count
+                )
+                cell_height = sum(
+                    row_heights[r - start_row]
+                    for r in range(merge["start_row"], merge["end_row"])
+                    if start_row <= r < start_row + row_count
+                )
+
+            cell = row_vals[c_idx] if c_idx < len(row_vals) else {}
+            eff = cell.get("effectiveFormat", {})
+            bg = _color_from_google(eff.get("backgroundColor"), (255, 255, 255))
+
+            draw.rectangle([x, y, x + cell_width, y + cell_height], fill=bg)
+
+            text = cell.get("formattedValue")
+            if text is None:
+                text = ""
+            text = str(text)
+
+            tf = eff.get("textFormat", {})
+            fg = _color_from_google(tf.get("foregroundColor"), (17, 17, 17))
+            bold = bool(tf.get("bold"))
+
+            align = eff.get("horizontalAlignment", "LEFT")
+            pad = 4
+            text_w = int(default_font.getlength(text)) if text else 0
+            text_h = font_height
+            if align == "CENTER":
+                tx = x + max(pad, (cell_width - text_w) // 2)
+            elif align == "RIGHT":
+                tx = x + max(pad, cell_width - text_w - pad)
+            else:
+                tx = x + pad
+            ty = y + max(2, (cell_height - text_h) // 2)
+
+            if text:
+                draw.text((tx, ty), text, fill=fg, font=default_font)
+                if bold:
+                    draw.text((tx + 1, ty), text, fill=fg, font=default_font)
+
+            borders = eff.get("borders", {})
+            for side, x1, y1, x2, y2 in [
+                ("top", x, y, x + cell_width, y),
+                ("bottom", x, y + cell_height, x + cell_width, y + cell_height),
+                ("left", x, y, x, y + cell_height),
+                ("right", x + cell_width, y, x + cell_width, y + cell_height),
+            ]:
+                b = borders.get(side)
+                if b:
+                    color = _color_from_google(b.get("color"), (217, 217, 217))
+                    draw.line([x1, y1, x2, y2], fill=color, width=1)
+
+            x += col_widths[c_idx]
+        y += row_heights[r_idx]
 
     max_width = 2000
     max_height = 1400
@@ -297,6 +420,30 @@ def render_table_image(values: List[List[str]]) -> bytes:
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def stack_images_vertically(images: List[bytes], padding: int = 8) -> bytes:
+    pil_images = [Image.open(io.BytesIO(b)).convert("RGB") for b in images if b]
+    if not pil_images:
+        img = Image.new("RGB", (400, 60), "white")
+        draw = ImageDraw.Draw(img)
+        draw.text((10, 20), "No data", fill="#111111", font=ImageFont.load_default())
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+
+    width = max(i.width for i in pil_images)
+    height = sum(i.height for i in pil_images) + padding * (len(pil_images) - 1)
+    combined = Image.new("RGB", (width, height), "white")
+
+    y = 0
+    for img in pil_images:
+        combined.paste(img, (0, y))
+        y += img.height + padding
+
+    buf = io.BytesIO()
+    combined.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 
 
@@ -328,23 +475,30 @@ def send_dashboard_images(sheets, sent_ts_pht: str) -> None:
     if not SEATALK_WEBHOOK_URL:
         return
 
-    images: List[List[List[str]]] = []
-    images.append(get_range_values(sheets, "Backlogs Summary", "B2:R63"))
-    images.append(get_range_values(sheets, "[SOC5] SOCPacked_Dashboard", "A1:T29"))
+    images: List[bytes] = []
+    images.append(render_sheet_range_image(sheets, "Backlogs Summary", "B2:R63"))
+    images.append(render_sheet_range_image(sheets, "[SOC5] SOCPacked_Dashboard", "A1:T29"))
 
-    header = get_range_values(sheets, "[SOC5] SOCPacked_Dashboard", "A1:U9")
+    header_img = render_sheet_range_image(sheets, "[SOC5] SOCPacked_Dashboard", "A1:U9")
     for cont_range in ["A30:U48", "A50:U94", "A95:U127", "A129:U157"]:
-        cont = get_range_values(sheets, "[SOC5] SOCPacked_Dashboard", cont_range)
-        combined = header + [[""]] + cont
+        cont_img = render_sheet_range_image(sheets, "[SOC5] SOCPacked_Dashboard", cont_range)
+        combined = stack_images_vertically([header_img, cont_img], padding=8)
         images.append(combined)
 
-    for values in images:
-        image_bytes = render_table_image(values)
-        send_seatalk_image(image_bytes)
+    for idx, image_bytes in enumerate(images, start=1):
+        try:
+            send_seatalk_image(image_bytes)
+            log(f"SeaTalk image sent {idx}/{len(images)}.")
+        except Exception as exc:
+            log(f"SeaTalk image failed {idx}/{len(images)}: {exc}")
 
-    send_seatalk_text(
-        f"{{mention @all}} Sharing OB Pending for dispatch as of {sent_ts_pht}. Thank you!"
-    )
+    try:
+        send_seatalk_text(
+            f"{{mention @all}} Sharing OB Pending for dispatch as of {sent_ts_pht}. Thank you!"
+        )
+        log("SeaTalk text sent.")
+    except Exception as exc:
+        log(f"SeaTalk text failed: {exc}")
 
 
 def update_backlogs_status(sheets, value: str):
@@ -431,7 +585,10 @@ def process_folder(drive, sheets, folder_id: str, state: Dict, ignore_last_dt: b
     save_state(state)
 
     update_backlogs_status(sheets, now_display)
-    send_dashboard_images(sheets, now_display)
+    if SKIP_SEATALK_IMAGES:
+        log("Skipping SeaTalk images (SKIP_SEATALK_IMAGES enabled).")
+    else:
+        send_dashboard_images(sheets, now_display)
     print("Import complete.")
 
 
