@@ -5,6 +5,7 @@ import uuid
 import zipfile
 from base64 import b64encode
 from datetime import datetime, timezone, timedelta
+import time
 import threading
 from typing import Dict, List
 from urllib import request as urlrequest
@@ -14,6 +15,7 @@ from flask import Flask, jsonify, request
 from PIL import Image, ImageDraw, ImageFont
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 
@@ -81,6 +83,28 @@ def save_state(state: Dict) -> None:
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).isoformat()
     print(f"[{ts}] {msg}")
+
+
+def _should_retry_http_error(exc: Exception) -> bool:
+    if isinstance(exc, HttpError):
+        try:
+            return 500 <= int(exc.resp.status) < 600
+        except Exception:
+            return True
+    return False
+
+
+def _with_retries(func, label: str, attempts: int = 5):
+    delay = 1.0
+    for attempt in range(1, attempts + 1):
+        try:
+            return func()
+        except Exception as exc:
+            if attempt >= attempts or not _should_retry_http_error(exc):
+                raise
+            log(f"{label} failed (attempt {attempt}/{attempts}); retrying in {delay:.1f}s: {exc}")
+            time.sleep(delay)
+            delay *= 2
 
 
 def build_clients():
@@ -186,26 +210,35 @@ def format_status_timestamp(dt: datetime) -> str:
 def overwrite_sheet(sheets, values):
     safe = DEST_SHEET_TAB_NAME.replace("'", "''")
 
-    sheets.spreadsheets().values().clear(
-        spreadsheetId=DEST_SHEET_ID,
-        range=f"'{safe}'!A:J",
-        body={}
-    ).execute()
+    _with_retries(
+        lambda: sheets.spreadsheets().values().clear(
+            spreadsheetId=DEST_SHEET_ID,
+            range=f"'{safe}'!A:J",
+            body={}
+        ).execute(),
+        "Sheets clear"
+    )
 
-    sheets.spreadsheets().values().update(
-        spreadsheetId=DEST_SHEET_ID,
-        range=f"'{safe}'!A1:J",
-        valueInputOption="RAW",
-        body={"values": values}
-    ).execute()
+    _with_retries(
+        lambda: sheets.spreadsheets().values().update(
+            spreadsheetId=DEST_SHEET_ID,
+            range=f"'{safe}'!A1:J",
+            valueInputOption="RAW",
+            body={"values": values}
+        ).execute(),
+        "Sheets update"
+    )
 
 
 def get_range_values(sheets, tab_name: str, a1_range: str) -> List[List[str]]:
     safe = tab_name.replace("'", "''")
-    res = sheets.spreadsheets().values().get(
-        spreadsheetId=DEST_SHEET_ID,
-        range=f"'{safe}'!{a1_range}",
-    ).execute()
+    res = _with_retries(
+        lambda: sheets.spreadsheets().values().get(
+            spreadsheetId=DEST_SHEET_ID,
+            range=f"'{safe}'!{a1_range}",
+        ).execute(),
+        "Sheets get range"
+    )
     return res.get("values", [])
 
 
@@ -314,12 +347,15 @@ def send_dashboard_images(sheets, sent_ts_pht: str) -> None:
 
 def update_backlogs_status(sheets, value: str):
     safe = BACKLOGS_STATUS_TAB.replace("'", "''")
-    sheets.spreadsheets().values().update(
-        spreadsheetId=DEST_SHEET_ID,
-        range=f"'{safe}'!{BACKLOGS_STATUS_CELL}",
-        valueInputOption="RAW",
-        body={"values": [[value]]},
-    ).execute()
+    _with_retries(
+        lambda: sheets.spreadsheets().values().update(
+            spreadsheetId=DEST_SHEET_ID,
+            range=f"'{safe}'!{BACKLOGS_STATUS_CELL}",
+            valueInputOption="RAW",
+            body={"values": [[value]]},
+        ).execute(),
+        "Sheets update status"
+    )
 
 
 def collect_rows_from_folder(drive, folder_id: str, state: Dict, ignore_last_dt: bool) -> Dict:
@@ -522,7 +558,10 @@ def webhook():
             log("Webhook worker started.")
             state = load_state()
             drive, sheets = build_clients()
-            handle_drive_changes(drive, sheets, state)
+            try:
+                handle_drive_changes(drive, sheets, state)
+            except Exception as exc:
+                log(f"Webhook worker error: {exc}")
         finally:
             log("Webhook worker finished.")
             rerun = False
